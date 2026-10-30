@@ -1,0 +1,23 @@
+﻿# Environment & Secrets
+.env
+*.env
+
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+env/
+backend/uploads/*
+
+# Node / Frontend
+node_modules/
+dist/
+build/
+.vite/
+
+# Playwright & OS Artifacts
+test-results/
+playwright-report/
+.DS_Store
+Thumbs.db
