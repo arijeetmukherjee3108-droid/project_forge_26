@@ -83,7 +83,7 @@ _SERVICE_PLUS = PortalConfig(
         ),
         PortalStep(
             action=ActionType.FILL,
-            field_key="mobile",
+            field_key="mobile_number",
             selectors=["#mobileNumberText", "input[name='spdvCitizenMobileNo']"],
             description="Enter mobile number",
         ),
@@ -142,7 +142,7 @@ _LOCAL_MOCK = PortalConfig(
         ),
         PortalStep(
             action=ActionType.FILL,
-            field_key="mobile",
+            field_key="mobile_number",
             selectors=["#mobileNumberText"],
             description="Enter mobile number",
         ),
@@ -205,13 +205,13 @@ _VIDYA_LAKSHMI = PortalConfig(
         ),
         PortalStep(
             action=ActionType.FILL,
-            field_key="mobile",
+            field_key="mobile_number",
             selectors=["#txtMobile", "input[name='MobileNo']"],
             description="Enter mobile number",
         ),
         PortalStep(
             action=ActionType.FILL,
-            field_key="dob",
+            field_key="date_of_birth",
             selectors=["#txtDOB", "input[name='DateOfBirth']"],
             description="Enter date of birth",
         ),
