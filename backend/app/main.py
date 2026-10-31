@@ -20,6 +20,12 @@ DO NOT log request bodies — they may contain personal citizen data.
 
 from __future__ import annotations
 
+import sys
+import asyncio
+
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+
 import uuid
 from pathlib import Path
 from typing import Optional

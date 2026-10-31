@@ -280,7 +280,9 @@ SERVICE_RULES: dict[str, dict] = {
                 {
                     "fields": [
                         "full_name",
+                        "father_or_guardian_name",
                         "mobile_number",
+                        "email",
                         "state",
                         "district",
                         "pincode",
