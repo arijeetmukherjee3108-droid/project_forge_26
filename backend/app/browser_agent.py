@@ -28,18 +28,32 @@ from playwright.async_api import (
     Playwright,
 )
 
-from backend.app.portal_maps import (
-    ActionType,
-    PortalConfig,
-    PortalStep,
-    get_portal_config,
-)
-from backend.app.schemas import (
-    AgentStatus,
-    ApplyStartResponse,
-    ApplyResumeResponse,
-    CitizenProfile,
-)
+try:
+    from app.portal_maps import (
+        ActionType,
+        PortalConfig,
+        PortalStep,
+        get_portal_config,
+    )
+    from app.schemas import (
+        AgentStatus,
+        ApplyStartResponse,
+        ApplyResumeResponse,
+        CitizenProfile,
+    )
+except ImportError:
+    from backend.app.portal_maps import (
+        ActionType,
+        PortalConfig,
+        PortalStep,
+        get_portal_config,
+    )
+    from backend.app.schemas import (
+        AgentStatus,
+        ApplyStartResponse,
+        ApplyResumeResponse,
+        CitizenProfile,
+    )
 
 logger = logging.getLogger(__name__)
 
