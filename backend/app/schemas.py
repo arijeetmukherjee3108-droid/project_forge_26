@@ -396,3 +396,59 @@ class ApplyResumeResponse(BaseModel):
         default=None,
         description="Base-64 encoded PNG of the final confirmation page.",
     )
+
+
+# ---------- compressor.prepare_for_upload return type ----------------------
+
+class PreparedFile(BaseModel):
+    """
+    Result of compressor.prepare_for_upload().
+
+    Member 1 (browser agent) calls prepare_for_upload() and uses final_path
+    to attach the document to the portal form. Member 3 shows original_bytes,
+    final_bytes, message and warnings in the confirmation UI.
+    """
+
+    final_path: str = Field(
+        description=(
+            "Absolute path of the file to upload. "
+            "Equals the original path when compressed=False, otherwise a "
+            "uuid-named copy inside backend/uploads/."
+        ),
+    )
+    original_bytes: int = Field(
+        description="Size of the original file in bytes.",
+    )
+    final_bytes: int = Field(
+        description="Size of the file at final_path in bytes.",
+    )
+    compressed: bool = Field(
+        description="True when a compressed copy was produced.",
+    )
+    converted: bool = Field(
+        description="True when the file type was changed (e.g. PNG → PDF).",
+    )
+    method_used: str = Field(
+        description=(
+            "Short label describing what was done: "
+            "'none', 'pymupdf', 'pymupdf_render_150dpi', "
+            "'ghostscript:/printer', 'ghostscript:/ebook', 'ghostscript:/screen', "
+            "'pillow_quality_75', 'pillow_resize_90pct', etc."
+        ),
+    )
+    fits: bool = Field(
+        description="True when final_bytes <= max_bytes.",
+    )
+    warnings: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Non-fatal issues: e.g. Ghostscript not installed, "
+            "signed PDF detected, readability degraded, page cap hit."
+        ),
+    )
+    message: str = Field(
+        description=(
+            "Plain-English sentence suitable for showing to the citizen, "
+            "e.g. 'Your file was reduced from 2.4 MB to 180 KB using PyMuPDF.'"
+        ),
+    )
