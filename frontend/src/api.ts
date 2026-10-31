@@ -18,9 +18,17 @@ const BASE_URL = 'http://127.0.0.1:8000';
 
 // ── 0. Intent Classification (Bugs 1 & 2: Dynamic Search Routing) ─────────────
 
+export interface BackendIntentClassifyResponse {
+  matched_service_id: string;
+  service_name: string;
+  confidence: number;
+  explanation: string;
+  suggested_documents?: string[];
+}
+
 /**
  * Known Government Services catalog for client-side fallback
- * when teammate's endpoint is being developed.
+ * and UI metadata augmentation.
  */
 export const KNOWN_SERVICES_CATALOG: IntentClassificationResponse[] = [
   {
@@ -68,6 +76,17 @@ export const KNOWN_SERVICES_CATALOG: IntentClassificationResponse[] = [
     description: 'Cashless healthcare coverage of up to ₹5,00,000 per family per year for secondary and tertiary hospitalization.',
   },
   {
+    service_id: 'ration_card',
+    service_name: 'National Food Security (NFSA) Subsidized Food & Ration Card',
+    portal_id: 'SERVICE_PLUS_REGISTRATION',
+    portal_name: 'National Food Security Portal / State e-District',
+    portal_url: 'https://serviceonline.gov.in/citizenRegistration.html',
+    category: 'general',
+    required_documents: ['Income Certificate', 'Aadhaar Card', 'Family Domicile Proof'],
+    confidence: 0.92,
+    description: 'Subsidized grain distribution, Antyodaya Anna Yojana, and NFSA ration card issuance.',
+  },
+  {
     service_id: 'citizen_registration',
     service_name: 'National ServicePlus — Citizen General e-Services & Certificates',
     portal_id: 'SERVICE_PLUS_REGISTRATION',
@@ -107,31 +126,71 @@ export const matchIntentFallback = (query: string): IntentClassificationResponse
     return KNOWN_SERVICES_CATALOG[1]; // ServicePlus 1784
   }
 
+  // Subsidized Ration & Food Security
+  if (/ration|rashan|food|grain|bpl|nfsa|antyodaya/i.test(q)) {
+    return KNOWN_SERVICES_CATALOG[4]; // Ration Card
+  }
+
   // Citizen Certificates (Income, Caste, Domicile, Residence)
   if (/certificate|caste|income|domicile|residence|praman|patra|birth|death|bonafide/i.test(q)) {
-    return KNOWN_SERVICES_CATALOG[4]; // General ServicePlus e-District
+    return KNOWN_SERVICES_CATALOG[5]; // General ServicePlus e-District
   }
 
   // Default: General ServicePlus Citizen Registration
-  return KNOWN_SERVICES_CATALOG[4];
+  return KNOWN_SERVICES_CATALOG[5];
 };
 
 /**
  * Classifies citizen intent into target government service.
- * Tries teammate's POST /api/intent/classify first; falls back smoothly if pending.
+ * Connects directly to backend POST /api/intent/classify with intelligent fallback.
  */
 export const classifyIntent = async (query: string): Promise<IntentClassificationResponse> => {
   try {
-    const resp = await axios.post<IntentClassificationResponse>(
+    const resp = await axios.post<BackendIntentClassifyResponse>(
       `${BASE_URL}/api/intent/classify`,
-      { query },
-      { timeout: 2500 }
+      { text: query, query },
+      { timeout: 3500 }
     );
-    if (resp.data && resp.data.service_id) {
-      return resp.data;
+    if (resp.data && resp.data.matched_service_id) {
+      const b = resp.data;
+      const rawId = b.matched_service_id.toLowerCase();
+      const sid = rawId.replace(/[-_]/g, '');
+
+      // Check known catalog for matching service
+      const match =
+        KNOWN_SERVICES_CATALOG.find((k) => k.service_id.toLowerCase().replace(/[-_]/g, '') === sid) ||
+        KNOWN_SERVICES_CATALOG.find((k) => sid.includes(k.service_id.toLowerCase()) || k.service_id.toLowerCase().includes(sid));
+
+      if (match) {
+        return {
+          ...match,
+          service_name: b.service_name || match.service_name,
+          confidence: b.confidence ?? match.confidence,
+          description: b.explanation || match.description,
+          required_documents: b.suggested_documents?.length ? b.suggested_documents : match.required_documents,
+        };
+      }
+
+      // If backend introduced a new service_id
+      const isEdu = /vidya|scholarship|loan|student/i.test(rawId);
+      const isAgri = /kisan|farmer|krishi/i.test(rawId);
+      const isHealth = /ayushman|health|hospital/i.test(rawId);
+      const category = isEdu ? 'education' : isAgri ? 'agriculture' : isHealth ? 'health' : 'general';
+
+      return {
+        service_id: b.matched_service_id,
+        service_name: b.service_name,
+        portal_id: isEdu ? 'VIDYA_LAKSHMI_PORTAL' : isAgri ? 'PM_KISAN_PORTAL' : isHealth ? 'PM_JAY_PORTAL' : 'SERVICE_PLUS_REGISTRATION',
+        portal_name: isEdu ? 'Vidya Lakshmi Portal (Ministry of Education & NSDL)' : isAgri ? 'PM-KISAN Official Portal' : 'National ServicePlus Portal (NIC)',
+        portal_url: isEdu ? 'https://www.vidyalakshmi.co.in/Students/' : isAgri ? 'https://pmkisan.gov.in/' : 'https://serviceonline.gov.in/citizenRegistration.html',
+        category,
+        required_documents: b.suggested_documents?.length ? b.suggested_documents : ['Income Certificate', 'Aadhaar Card'],
+        confidence: b.confidence ?? 0.95,
+        description: b.explanation || 'Official government welfare scheme.',
+      };
     }
   } catch {
-    // Teammate's endpoint not yet up: use intelligent fallback
+    // Backend offline: use intelligent fallback
   }
   return matchIntentFallback(query);
 };
@@ -200,12 +259,15 @@ export const startApplication = async (
 export const resumeApplication = async (
   sessionId: string,
   captchaText: string,
-  approve: boolean = true
+  approve: boolean = true,
+  submitFinal?: boolean
 ): Promise<ApplyResumeResponse> => {
+  const isFinal = submitFinal !== undefined ? submitFinal : approve;
   const resp = await axios.post<ApplyResumeResponse>(`${BASE_URL}/api/apply/resume`, {
     session_id: sessionId,
     captcha_text: captchaText,
     approve,
+    submit_final: isFinal,
   });
   return resp.data;
 };
