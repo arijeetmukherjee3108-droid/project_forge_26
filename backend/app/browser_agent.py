@@ -217,10 +217,14 @@ async def _execute_step(
         value = _get_field_value(session.profile, step, session.document_path)
         if value:
             el = await _resolve_element(page, step.selectors, step.timeout_ms)
+            # Try exact label, then uppercase (standard for Indian .gov.in portals), then value
             try:
-                await el.select_option(label=value)
+                await el.select_option(label=value, timeout=2000)
             except Exception:
-                await el.select_option(value=value)
+                try:
+                    await el.select_option(label=value.upper(), timeout=2000)
+                except Exception:
+                    await el.select_option(value=value)
 
     elif action == ActionType.CHECK:
         el = await _resolve_element(page, step.selectors, step.timeout_ms)
