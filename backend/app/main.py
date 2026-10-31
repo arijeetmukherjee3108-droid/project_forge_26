@@ -26,19 +26,42 @@ from typing import Optional
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 
-from app import extractor, eligibility
-from app.browser_agent import start_application, resume_application
-from app.schemas import (
-    AgentStatus,
-    ApplyResumeRequest,
-    ApplyResumeResponse,
-    ApplyStartRequest,
-    ApplyStartResponse,
-    EligibilityRequest,
-    EligibilityResponse,
-    ExtractResponse,
-)
+try:
+    from app import extractor, eligibility
+    from app.browser_agent import start_application, resume_application
+    from app.google_vault import search_google_vault, fetch_google_vault_file
+    from app.schemas import (
+        AgentStatus,
+        ApplyResumeRequest,
+        ApplyResumeResponse,
+        ApplyStartRequest,
+        ApplyStartResponse,
+        EligibilityRequest,
+        EligibilityResponse,
+        ExtractResponse,
+        GoogleFetchRequest,
+        GoogleSearchRequest,
+        GoogleSearchResponse,
+    )
+except ImportError:
+    from backend.app import extractor, eligibility
+    from backend.app.browser_agent import start_application, resume_application
+    from backend.app.google_vault import search_google_vault, fetch_google_vault_file
+    from backend.app.schemas import (
+        AgentStatus,
+        ApplyResumeRequest,
+        ApplyResumeResponse,
+        ApplyStartRequest,
+        ApplyStartResponse,
+        EligibilityRequest,
+        EligibilityResponse,
+        ExtractResponse,
+        GoogleFetchRequest,
+        GoogleSearchRequest,
+        GoogleSearchResponse,
+    )
 
 # ---------------------------------------------------------------------------
 # App setup
@@ -72,6 +95,9 @@ app.add_middleware(
 UPLOAD_DIR = Path(__file__).resolve().parent.parent / "uploads"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
+STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+STATIC_DIR.mkdir(parents=True, exist_ok=True)
+
 ALLOWED_SUFFIXES = {".pdf", ".png", ".jpg", ".jpeg"}
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB
 
@@ -87,6 +113,15 @@ async def health_check() -> dict:
     Useful for the team to confirm the server is up before running tests.
     """
     return {"status": "ok"}
+
+
+@app.get("/mock_portal.html", include_in_schema=False)
+async def serve_mock_portal():
+    """Serves the offline mock portal for live document-upload testing."""
+    mock_file = STATIC_DIR / "mock_portal.html"
+    if mock_file.exists():
+        return FileResponse(mock_file, media_type="text/html")
+    raise HTTPException(status_code=404, detail="Mock portal not found")
 
 
 @app.post(
@@ -216,3 +251,83 @@ async def apply_resume(body: ApplyResumeRequest) -> ApplyResumeResponse:
         captcha_text=body.captcha_text,
         approve=body.approve,
     )
+
+
+@app.post(
+    "/api/documents/google-search",
+    response_model=GoogleSearchResponse,
+    tags=["google-vault"],
+    summary="Search Google Drive & Gmail for citizen documents",
+)
+async def google_search(body: GoogleSearchRequest) -> GoogleSearchResponse:
+    """
+    Searches the citizen's Google Drive and Gmail attachments for documents
+    matching the query (e.g. 'income certificate', 'marksheet').
+
+    Returns a list of candidate files with name, source, size, and date
+    so the citizen can pick the correct one before downloading.
+
+    Set ``demo_mode=true`` for hackathon demos (returns synthetic candidates
+    without requiring a live Google OAuth token).
+    """
+    candidates = search_google_vault(
+        access_token=body.access_token,
+        query=body.query,
+        demo_mode=body.demo_mode,
+    )
+    return GoogleSearchResponse(
+        query=body.query,
+        candidates=candidates,
+    )
+
+
+@app.post(
+    "/api/documents/google-fetch",
+    response_model=ExtractResponse,
+    tags=["google-vault"],
+    summary="Download a file from Google Drive/Gmail, extract profile, and save for upload",
+)
+async def google_fetch(body: GoogleFetchRequest) -> ExtractResponse:
+    """
+    Downloads the selected file from Google Drive or Gmail, saves it to
+    ``backend/uploads/``, extracts a CitizenProfile using the same pipeline
+    as ``/api/documents/extract``, and returns the standard ExtractResponse.
+
+    The saved filename is appended to ``profile.source_documents`` as
+    ``"saved:<uuid>.pdf"`` so the browser agent can later attach it to
+    the government portal form.
+
+    Set ``demo_mode=true`` for hackathon demos (generates a synthetic
+    certificate PDF without calling Google APIs).
+    """
+    try:
+        file_bytes, filename = fetch_google_vault_file(
+            access_token=body.access_token,
+            file_id=body.file_id,
+            source=body.source,
+            demo_mode=body.demo_mode,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Failed to fetch file from Google: {exc}",
+        ) from exc
+
+    # Save to uploads/
+    suffix = Path(filename).suffix.lower() or ".pdf"
+    if suffix not in ALLOWED_SUFFIXES:
+        suffix = ".pdf"
+    saved_name = f"{uuid.uuid4().hex}{suffix}"
+    saved_path = UPLOAD_DIR / saved_name
+    saved_path.write_bytes(file_bytes)
+
+    # Extract fields
+    try:
+        result: ExtractResponse = extractor.extract_profile(file_bytes, filename)
+    except ValueError as exc:
+        raise HTTPException(status_code=415, detail=str(exc)) from exc
+
+    # Append saved filename so browser_agent can locate it
+    result.profile.source_documents.append(f"saved:{saved_name}")
+
+    return result
