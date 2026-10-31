@@ -300,22 +300,32 @@ interface FieldMeta {
   label: string;
   type?: string;
   spanTwo?: boolean;
+  options?: string[];
+  placeholder?: string;
 }
 
 const FORM_FIELDS: FieldMeta[] = [
-  { key: 'full_name', label: 'Full Name' },
-  { key: 'father_or_guardian_name', label: "Father / Guardian's Name" },
-  { key: 'date_of_birth', label: 'Date of Birth (DD/MM/YYYY)' },
-  { key: 'gender', label: 'Gender' },
-  { key: 'mobile_number', label: 'Mobile Number' },
-  { key: 'email', label: 'Email Address' },
-  { key: 'state', label: 'State' },
-  { key: 'district', label: 'District' },
-  { key: 'pincode', label: 'Pin Code' },
-  { key: 'address_line', label: 'Full Residential Address', spanTwo: true },
-  { key: 'annual_income', label: 'Annual Family Income (₹)', type: 'number' },
-  { key: 'category', label: 'Category' },
+  { key: 'full_name', label: 'Full Name', placeholder: 'Full Name as on certificate' },
+  { key: 'father_or_guardian_name', label: "Father / Guardian's Name", placeholder: "Father or Guardian's full name" },
+  { key: 'date_of_birth', label: 'Date of Birth (Calendar Selection)', type: 'date' },
+  { key: 'gender', label: 'Gender', type: 'select', options: ['male', 'female', 'other'] },
+  { key: 'mobile_number', label: 'Mobile Number (10 Digits)', type: 'tel', placeholder: '10-digit mobile number' },
+  { key: 'email', label: 'Email Address (e.g. name@gmail.com)', type: 'email', placeholder: 'name@gmail.com or name@yahoo.com' },
+  { key: 'state', label: 'State', placeholder: 'e.g. Uttar Pradesh' },
+  { key: 'district', label: 'District', placeholder: 'e.g. Varanasi, Lucknow' },
+  { key: 'pincode', label: 'Pin Code (6 Digits)', type: 'text', placeholder: '6-digit PIN code' },
+  { key: 'address_line', label: 'Full Residential Address', spanTwo: true, placeholder: 'House number, street, locality' },
+  { key: 'annual_income', label: 'Annual Family Income (₹)', type: 'number', placeholder: 'e.g. 165000' },
+  { key: 'category', label: 'Category', type: 'select', options: ['general', 'obc', 'sc', 'st', 'ews'] },
 ];
+
+const toIsoDate = (val?: string) => {
+  if (!val) return '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(val)) return val;
+  const m = val.match(/^(\d{2})[\/\-](\d{2})[\/\-](\d{4})$/);
+  if (m) return `${m[3]}-${m[2]}-${m[1]}`;
+  return val;
+};
 
 const App: React.FC = () => {
   const [currentStep, setCurrentStep] = useState(1);
@@ -734,7 +744,48 @@ const App: React.FC = () => {
 
   const handleInputChange = (e: ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
-    setProfile((prev) => ({ ...prev, [name]: value }));
+    let finalValue: any = value;
+
+    if (name === 'mobile_number') {
+      finalValue = value.replace(/\D/g, '').slice(0, 10);
+    } else if (name === 'pincode') {
+      finalValue = value.replace(/\D/g, '').slice(0, 6);
+    } else if (name === 'annual_income') {
+      finalValue = value ? parseInt(value.replace(/\D/g, ''), 10) || 0 : undefined;
+    }
+
+    setProfile((prev) => ({ ...prev, [name]: finalValue }));
+
+    if (uncertainFields.includes(name) && String(finalValue).trim().length > 0) {
+      setUncertainFields((prev) => prev.filter((k) => k !== name));
+    }
+
+    if (eligibility) {
+      setEligibility(null);
+    }
+  };
+
+  const handleProceedManually = () => {
+    setProfile((prev) => ({
+      ...prev,
+      state: prev.state || 'Uttar Pradesh',
+      gender: prev.gender || 'male',
+      category: prev.category || 'general',
+    }));
+    setUncertainFields([]);
+    setExtraction({
+      profile: {
+        ...profile,
+        state: profile.state || 'Uttar Pradesh',
+        gender: profile.gender || 'male',
+        category: profile.category || 'general',
+      },
+      uncertain_fields: [],
+      raw_text_preview: 'Manual Entry: No document uploaded. Citizen will complete the verification form directly.',
+      message: 'Manual entry mode active. Please fill out your details.',
+    });
+    showToast('Manual Entry: Please fill in your citizen details.', 'info');
+    setCurrentStep(3);
   };
 
   const handleCheckEligibility = async () => {
@@ -1123,6 +1174,22 @@ const App: React.FC = () => {
                     <span className="vault-btn-title">Fetch from Google Drive / Gmail</span>
                   </div>
                 </button>
+
+                <div className="manual-entry-divider">
+                  <span className="divider-line" />
+                  <span className="divider-text">OR FILL MANUALLY</span>
+                  <span className="divider-line" />
+                </div>
+
+                <button
+                  type="button"
+                  className="manual-entry-btn"
+                  onClick={handleProceedManually}
+                  title="Proceed directly to manual entry without uploading a certificate"
+                >
+                  <Icons.Connectors />
+                  <span>Enter Details Manually (Skip Upload) →</span>
+                </button>
               </div>
 
               {file && (
@@ -1161,112 +1228,195 @@ const App: React.FC = () => {
           {/* ════════════════════════════════════════
               STEP 3: VERIFICATION & ELIGIBILITY
           ════════════════════════════════════════ */}
-          {currentStep === 3 && (
-            <div className="gemini-card">
-              <h2 className="card-title">Verify Extracted Citizen Data</h2>
-              <p className="card-desc">
-                Fields flagged with <span className="review-pill-inline">Review</span> require your confirmation. You can edit any value.
-              </p>
+          {currentStep === 3 && (() => {
+            const isMobileValid = Boolean(profile.mobile_number && /^\d{10}$/.test(profile.mobile_number.trim()));
+            const isEmailValid = Boolean(profile.email && /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(profile.email.trim()));
+            const isPincodeValid = Boolean(profile.pincode && /^\d{6}$/.test(profile.pincode.trim()));
 
-              <div className="gemini-form-grid">
-                {FORM_FIELDS.map((f) => {
-                  const uncertain = uncertainFields.includes(f.key as string);
+            const missingFields = FORM_FIELDS.filter((f) => {
+              const val = (profile as any)[f.key];
+              if (val === undefined || val === null || String(val).trim() === '') return true;
+              if (f.key === 'mobile_number') return !isMobileValid;
+              if (f.key === 'email') return !isEmailValid;
+              if (f.key === 'pincode') return !isPincodeValid;
+              return false;
+            });
+
+            const isFormComplete = missingFields.length === 0;
+
+            return (
+              <div className="gemini-card">
+                <h2 className="card-title">Verify Extracted Citizen Data</h2>
+                <p className="card-desc">
+                  Fields flagged with <span className="review-pill-inline">Review</span> require your confirmation. You can edit any value.
+                </p>
+
+                <div className="gemini-form-grid">
+                  {FORM_FIELDS.map((f) => {
+                    const uncertain = uncertainFields.includes(f.key as string);
+                    const val = (profile as any)[f.key];
+                    const strVal = val !== undefined && val !== null ? String(val) : '';
+
+                    let validationMsg = null;
+                    if (f.key === 'mobile_number') {
+                      if (strVal.length > 0 && strVal.length < 10) {
+                        validationMsg = <div className="field-validation-msg error">⚠️ {10 - strVal.length} more digits needed (10-digit mobile)</div>;
+                      } else if (strVal.length === 10) {
+                        validationMsg = <div className="field-validation-msg success">✓ Valid 10-digit mobile number</div>;
+                      }
+                    } else if (f.key === 'email') {
+                      const isValidEmail = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(strVal.trim());
+                      if (strVal.length > 0 && !isValidEmail) {
+                        validationMsg = <div className="field-validation-msg error">⚠️ Must be valid email (e.g. name@gmail.com, name@yahoo.com)</div>;
+                      } else if (isValidEmail) {
+                        validationMsg = <div className="field-validation-msg success">✓ Valid email format</div>;
+                      }
+                    } else if (f.key === 'pincode') {
+                      if (strVal.length > 0 && strVal.length < 6) {
+                        validationMsg = <div className="field-validation-msg error">⚠️ {6 - strVal.length} more digits needed (6-digit PIN)</div>;
+                      } else if (strVal.length === 6) {
+                        validationMsg = <div className="field-validation-msg success">✓ Valid 6-digit PIN code</div>;
+                      }
+                    }
+
+                    return (
+                      <div key={f.key as string} className={`form-item ${f.spanTwo ? 'span-two' : ''}`}>
+                        <label className="item-label">
+                          <span>{f.label}</span>
+                          {uncertain && <span className="uncertain-tag">Review</span>}
+                        </label>
+                        {f.type === 'select' && f.options ? (
+                          <select
+                            className={`gemini-input ${uncertain ? 'uncertain-highlight' : ''}`}
+                            name={f.key as string}
+                            value={strVal}
+                            onChange={handleInputChange}
+                          >
+                            <option value="">Select {f.label}...</option>
+                            {f.options.map((opt) => (
+                              <option key={opt} value={opt}>
+                                {opt.toUpperCase()}
+                              </option>
+                            ))}
+                          </select>
+                        ) : (
+                          <input
+                            className={`gemini-input ${uncertain ? 'uncertain-highlight' : ''}`}
+                            type={f.type || 'text'}
+                            name={f.key as string}
+                            placeholder={f.placeholder}
+                            value={f.type === 'date' ? toIsoDate(profile.date_of_birth) : strVal}
+                            onChange={handleInputChange}
+                            max={f.type === 'date' ? new Date().toISOString().split('T')[0] : undefined}
+                          />
+                        )}
+                        {validationMsg}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {!isFormComplete && (
+                  <div className="incomplete-fields-callout">
+                    <div className="incomplete-title">
+                      <span>⚠️ Complete all required fields to check eligibility ({missingFields.length} remaining):</span>
+                    </div>
+                    <div className="missing-pills-row">
+                      {missingFields.map((f) => (
+                        <span key={f.key as string} className="missing-field-pill">
+                          {f.label.split(' (')[0]}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Mandatory Citizen Gatekeeper Checkbox */}
+                <div className="verification-gate" onClick={() => setVerified(!verified)}>
+                  <input
+                    type="checkbox"
+                    id="citizen-verified"
+                    checked={verified}
+                    onChange={(e) => setVerified(e.target.checked)}
+                    onClick={(e) => e.stopPropagation()}
+                  />
+                  <div>
+                    <div className="gate-label">I confirm and verify the accuracy of this data</div>
+                    <div className="gate-sub">The browser agent will fill the official portal using these details.</div>
+                  </div>
+                </div>
+
+                <div className="action-buttons-row">
+                  <button className="gemini-btn gemini-btn-tonal" onClick={() => setCurrentStep(2)}>
+                    Back
+                  </button>
+                  <button
+                    className="gemini-btn gemini-btn-tonal"
+                    disabled={!verified || !isFormComplete || loading}
+                    onClick={handleCheckEligibility}
+                    title={
+                      !isFormComplete
+                        ? `Please complete remaining ${missingFields.length} field(s)`
+                        : !verified
+                        ? 'Please tick the confirmation checkbox'
+                        : 'Check Scheme Eligibility'
+                    }
+                  >
+                    {loading ? 'Evaluating…' : 'Check Scheme Eligibility'}
+                  </button>
+                  {eligibility && (
+                    <button
+                      className="gemini-btn gemini-btn-active-blue"
+                      disabled={!verified || loading}
+                      onClick={handleStartAgent}
+                    >
+                      Launch AI Browser Agent
+                    </button>
+                  )}
+                </div>
+
+                {/* Eligibility card */}
+                {eligibility && (() => {
+                  const isEligible = Boolean(eligibility.eligible ?? (eligibility.status === 'ELIGIBLE'));
+                  const statusClass = isEligible ? 'status-eligible' : 'status-ineligible';
+                  const statusText = isEligible ? 'ELIGIBLE' : 'INELIGIBLE';
+                  const serviceNameClean = (eligibility.service_name || eligibility.scheme_name || 'ServicePlus Application')
+                    .replace(/\s*\(ID:\s*\d+\)/gi, '')
+                    .replace(/\s*\(ServicePlus\s*\d+\)/gi, '');
+
                   return (
-                    <div key={f.key as string} className={`form-item ${f.spanTwo ? 'span-two' : ''}`}>
-                      <label className="item-label">
-                        <span>{f.label}</span>
-                        {uncertain && <span className="uncertain-tag">Review</span>}
-                      </label>
-                      <input
-                        className={`gemini-input ${uncertain ? 'uncertain-highlight' : ''}`}
-                        type={f.type || 'text'}
-                        name={f.key as string}
-                        value={(profile as any)[f.key] ?? ''}
-                        onChange={handleInputChange}
-                      />
+                    <div className={`eligibility-banner ${statusClass}`}>
+                      <div className="banner-header">
+                        <span>{isEligible ? '✅' : '⚠️'}</span>
+                        <span>{statusText}: {serviceNameClean}</span>
+                      </div>
+
+                      {eligibility.summary && (
+                        <p style={{ margin: '0.4rem 0 0.8rem', fontSize: '0.88rem', color: isEligible ? 'rgba(255,255,255,0.85)' : '#f2b8b5' }}>
+                          {eligibility.summary}
+                        </p>
+                      )}
+
+                      <ul className="banner-reasons">
+                        {eligibility.results && eligibility.results.length > 0 ? (
+                          eligibility.results.map((r, i) => (
+                            <li key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem', marginBottom: '0.35rem' }}>
+                              <span>{r.passed ? '✅' : '❌'}</span>
+                              <span>{r.explanation || r.description || r.rule_id}</span>
+                            </li>
+                          ))
+                        ) : eligibility.reasons ? (
+                          eligibility.reasons.map((r, i) => (
+                            <li key={i}>{r}</li>
+                          ))
+                        ) : null}
+                      </ul>
                     </div>
                   );
-                })}
+                })()}
               </div>
-
-              {/* Mandatory Citizen Gatekeeper Checkbox */}
-              <div className="verification-gate" onClick={() => setVerified(!verified)}>
-                <input
-                  type="checkbox"
-                  id="citizen-verified"
-                  checked={verified}
-                  onChange={(e) => setVerified(e.target.checked)}
-                  onClick={(e) => e.stopPropagation()}
-                />
-                <div>
-                  <div className="gate-label">I confirm and verify the accuracy of this data</div>
-                  <div className="gate-sub">The browser agent will fill the official portal using these details.</div>
-                </div>
-              </div>
-
-              <div className="action-buttons-row">
-                <button className="gemini-btn gemini-btn-tonal" onClick={() => setCurrentStep(2)}>
-                  Back
-                </button>
-                <button
-                  className="gemini-btn gemini-btn-tonal"
-                  disabled={!verified || loading}
-                  onClick={handleCheckEligibility}
-                >
-                  {loading ? 'Evaluating…' : 'Check Scheme Eligibility'}
-                </button>
-                {eligibility && (
-                  <button
-                    className="gemini-btn gemini-btn-active-blue"
-                    disabled={!verified || loading}
-                    onClick={handleStartAgent}
-                  >
-                    Launch AI Browser Agent
-                  </button>
-                )}
-              </div>
-
-              {/* Eligibility card */}
-              {eligibility && (() => {
-                const isEligible = Boolean(eligibility.eligible ?? (eligibility.status === 'ELIGIBLE'));
-                const statusClass = isEligible ? 'status-eligible' : 'status-ineligible';
-                const statusText = isEligible ? 'ELIGIBLE' : 'INELIGIBLE';
-                const serviceNameClean = (eligibility.service_name || eligibility.scheme_name || 'ServicePlus Application')
-                  .replace(/\s*\(ID:\s*\d+\)/gi, '')
-                  .replace(/\s*\(ServicePlus\s*\d+\)/gi, '');
-
-                return (
-                  <div className={`eligibility-banner ${statusClass}`}>
-                    <div className="banner-header">
-                      <span>{isEligible ? '✅' : '⚠️'}</span>
-                      <span>{statusText}: {serviceNameClean}</span>
-                    </div>
-
-                    {eligibility.summary && (
-                      <p style={{ margin: '0.4rem 0 0.8rem', fontSize: '0.88rem', color: isEligible ? 'rgba(255,255,255,0.85)' : '#f2b8b5' }}>
-                        {eligibility.summary}
-                      </p>
-                    )}
-
-                    <ul className="banner-reasons">
-                      {eligibility.results && eligibility.results.length > 0 ? (
-                        eligibility.results.map((r, i) => (
-                          <li key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem', marginBottom: '0.35rem' }}>
-                            <span>{r.passed ? '✅' : '❌'}</span>
-                            <span>{r.explanation || r.description || r.rule_id}</span>
-                          </li>
-                        ))
-                      ) : eligibility.reasons ? (
-                        eligibility.reasons.map((r, i) => (
-                          <li key={i}>{r}</li>
-                        ))
-                      ) : null}
-                    </ul>
-                  </div>
-                );
-              })()}
-            </div>
-          )}
+            );
+          })()}
 
           {/* ════════════════════════════════════════
               STEP 4: SPLIT-SCREEN MISSION CONTROL
