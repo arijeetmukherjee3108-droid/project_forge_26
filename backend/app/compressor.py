@@ -30,7 +30,10 @@ from typing import Optional
 
 import pymupdf  # PyMuPDF
 
-from app.schemas import PreparedFile
+try:
+    from app.schemas import PreparedFile
+except ImportError:
+    from backend.app.schemas import PreparedFile
 
 # ---------------------------------------------------------------------------
 # Directory anchor — all output files stay inside here
