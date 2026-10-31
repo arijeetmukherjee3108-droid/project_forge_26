@@ -1,5 +1,5 @@
 // src/App.tsx
-import React, { useState, useRef, useCallback, useEffect, ChangeEvent, DragEvent } from 'react';
+import React, { useState, useRef, useCallback, useEffect, useMemo, ChangeEvent, DragEvent } from 'react';
 import './App.css';
 import {
   ApplicantProfile,
@@ -244,61 +244,160 @@ const MOCK_AGENT_STEPS: { action: string; field: MockPortalField }[] = [
   { action: '🔒 [PAUSE] Captcha detected. Cropped and waiting for citizen approval.', field: { label: '', value: '', type: 'text' } },
 ];
 
-const PROMPTS_BY_MODE = {
-  apply: [
-    'Apply for Vidya Lakshmi Higher Education Scholarship & Student Loan',
-    'Register for Construction Worker Welfare Scheme on ServicePlus (Form 1784)',
-    'Apply for PM-KISAN Farmer Income Support Scheme (₹6,000/yr)',
-    'Apply for Ayushman Bharat PM-JAY Cashless Health Card',
-    'Apply for Domicile / Income / Caste Certificate on ServicePlus',
-  ],
-  eligibility: [
-    'Check eligibility for Vidya Lakshmi Higher Education Loan subsidy',
-    'Verify income limits & age criteria for Construction Worker Welfare (1784)',
-    'Check land eligibility and required documents for PM-KISAN',
-    'Check family criteria and SECC eligibility for Ayushman Bharat PM-JAY',
-    'Check required documents for Citizen Registration on ServicePlus',
-  ],
-};
+// ── Bug 6: Domain Categorized Suggestions & Dynamic Prompt Pills ───────────────
+export type DomainCategory = 'all' | 'education' | 'welfare' | 'certificates' | 'agriculture' | 'health';
 
-const SUGGESTIONS_BY_MODE: Record<
-  'apply' | 'eligibility',
-  { iconType: 'briefcase' | 'sparkles' | 'book'; text: string }[]
-> = {
+export interface DomainMeta {
+  id: DomainCategory;
+  label: string;
+  icon: string;
+}
+
+export const DOMAIN_CATEGORIES: DomainMeta[] = [
+  { id: 'all', label: 'All Schemes', icon: '🌟' },
+  { id: 'education', label: 'Education / Scholarships', icon: '🎓' },
+  { id: 'welfare', label: 'Welfare / Pensions', icon: '🏛️' },
+  { id: 'certificates', label: 'Certificates & Domicile', icon: '📜' },
+  { id: 'agriculture', label: 'Agriculture / Farmers', icon: '🌾' },
+  { id: 'health', label: 'Healthcare', icon: '🏥' },
+];
+
+export interface DomainSuggestionItem {
+  iconType: 'briefcase' | 'sparkles' | 'book';
+  text: string;
+  domain: 'education' | 'welfare' | 'certificates' | 'agriculture' | 'health';
+  domainLabel: string;
+}
+
+export const DOMAIN_SUGGESTIONS: Record<'apply' | 'eligibility', DomainSuggestionItem[]> = {
   apply: [
     {
       iconType: 'sparkles',
       text: 'Apply for Vidya Lakshmi Higher Education Scholarship & Student Loan',
-    },
-    {
-      iconType: 'briefcase',
-      text: 'Apply for Construction Worker Welfare Certificate on ServicePlus',
+      domain: 'education',
+      domainLabel: 'Education',
     },
     {
       iconType: 'book',
-      text: 'Apply for PM-KISAN Farmer Income Support (₹6,000/year)',
+      text: 'Apply for National Means-cum-Merit Higher Education Scholarship',
+      domain: 'education',
+      domainLabel: 'Education',
+    },
+    {
+      iconType: 'briefcase',
+      text: 'Register for Construction Worker Welfare Scheme (Form 1784)',
+      domain: 'welfare',
+      domainLabel: 'Welfare',
     },
     {
       iconType: 'sparkles',
-      text: 'Apply for Ayushman Bharat PM-JAY Cashless Healthcare Card',
+      text: 'Apply for National Social Assistance Old Age & Disability Pension',
+      domain: 'welfare',
+      domainLabel: 'Welfare',
+    },
+    {
+      iconType: 'book',
+      text: 'Apply for Income & Asset Certificate (Aay Praman Patra)',
+      domain: 'certificates',
+      domainLabel: 'Certificates',
+    },
+    {
+      iconType: 'sparkles',
+      text: 'Apply for Domicile / Permanent Residence Certificate (Niwas Patra)',
+      domain: 'certificates',
+      domainLabel: 'Certificates',
+    },
+    {
+      iconType: 'briefcase',
+      text: 'Apply for Caste / Category Certificate (Jati Praman Patra)',
+      domain: 'certificates',
+      domainLabel: 'Certificates',
+    },
+    {
+      iconType: 'book',
+      text: 'Apply for PM-KISAN Farmer Income Support Scheme (₹6,000/yr)',
+      domain: 'agriculture',
+      domainLabel: 'Agriculture',
+    },
+    {
+      iconType: 'sparkles',
+      text: 'Register for PM Fasal Bima Yojana (Crop Insurance Scheme)',
+      domain: 'agriculture',
+      domainLabel: 'Agriculture',
+    },
+    {
+      iconType: 'sparkles',
+      text: 'Apply for Ayushman Bharat PM-JAY Cashless Health Card (₹5 Lakh)',
+      domain: 'health',
+      domainLabel: 'Healthcare',
+    },
+    {
+      iconType: 'briefcase',
+      text: 'Register for Universal Health Coverage on NHA Beneficiary Portal',
+      domain: 'health',
+      domainLabel: 'Healthcare',
     },
   ],
   eligibility: [
     {
       iconType: 'sparkles',
-      text: 'Check eligibility for Vidya Lakshmi Student Loan & Scholarship',
-    },
-    {
-      iconType: 'briefcase',
-      text: 'Check eligibility for Construction Worker Welfare (Form 1784)',
+      text: 'Check eligibility & interest subsidy criteria for Vidya Lakshmi Loan',
+      domain: 'education',
+      domainLabel: 'Education',
     },
     {
       iconType: 'book',
-      text: 'Verify landholding criteria and documents for PM-KISAN',
+      text: 'Verify marksheet percentage & family income limits for Scholarships',
+      domain: 'education',
+      domainLabel: 'Education',
+    },
+    {
+      iconType: 'briefcase',
+      text: 'Verify 90-day physical labor proof & age criteria for Worker Welfare (1784)',
+      domain: 'welfare',
+      domainLabel: 'Welfare',
     },
     {
       iconType: 'sparkles',
-      text: 'Check family coverage criteria for Ayushman Bharat PM-JAY',
+      text: 'Check BPL list status & criteria for National Social Pension',
+      domain: 'welfare',
+      domainLabel: 'Welfare',
+    },
+    {
+      iconType: 'book',
+      text: 'Check required documents for Income & Asset Certificate',
+      domain: 'certificates',
+      domainLabel: 'Certificates',
+    },
+    {
+      iconType: 'sparkles',
+      text: 'Verify domicile duration & address proof requirements for Niwas Patra',
+      domain: 'certificates',
+      domainLabel: 'Certificates',
+    },
+    {
+      iconType: 'book',
+      text: 'Check landholding criteria & Khatauni document rules for PM-KISAN',
+      domain: 'agriculture',
+      domainLabel: 'Agriculture',
+    },
+    {
+      iconType: 'sparkles',
+      text: 'Verify Aadhaar DBT bank account seeding for farmer subsidy',
+      domain: 'agriculture',
+      domainLabel: 'Agriculture',
+    },
+    {
+      iconType: 'sparkles',
+      text: 'Check family eligibility & SECC coverage criteria for PM-JAY',
+      domain: 'health',
+      domainLabel: 'Healthcare',
+    },
+    {
+      iconType: 'briefcase',
+      text: 'Verify cashless hospital network & family coverage for Health Card',
+      domain: 'health',
+      domainLabel: 'Healthcare',
     },
   ],
 };
@@ -349,25 +448,35 @@ const App: React.FC = () => {
   // Step 1: Intent
   const [intent, setIntent] = useState('');
   const [isListening, setIsListening] = useState(false);
+  const [selectedDomain, setSelectedDomain] = useState<DomainCategory>('all');
   const [promptIndex, setPromptIndex] = useState(0);
   const [fadeState, setFadeState] = useState(true);
   const [selectedService, setSelectedService] = useState<IntentClassificationResponse | null>(null);
   const [isClassifying, setIsClassifying] = useState(false);
   const [showSchemePicker, setShowSchemePicker] = useState(false);
 
-  // Smoothly rotate the placeholder text every 4 seconds based on active mode
+  // Filtered prompts for rotating capsule placeholder
+  const activePrompts = useMemo(() => {
+    const list = DOMAIN_SUGGESTIONS[activeMode] || [];
+    if (selectedDomain === 'all') {
+      return list.map((item) => item.text);
+    }
+    const filtered = list.filter((item) => item.domain === selectedDomain);
+    return filtered.length > 0 ? filtered.map((item) => item.text) : list.map((item) => item.text);
+  }, [activeMode, selectedDomain]);
+
+  // Smoothly rotate the placeholder text every 4 seconds based on active mode & selected domain
   useEffect(() => {
-    const activePrompts = PROMPTS_BY_MODE[activeMode];
     const interval = setInterval(() => {
       setFadeState(false);
       setTimeout(() => {
-        setPromptIndex((prev) => (prev + 1) % activePrompts.length);
+        setPromptIndex((prev) => (prev + 1) % (activePrompts.length || 1));
         setFadeState(true);
       }, 400);
     }, 4000);
 
     return () => clearInterval(interval);
-  }, [activeMode]);
+  }, [activePrompts]);
 
   // Step 2: Upload & Google Vault
   const [file, setFile] = useState<File | null>(null);
@@ -396,14 +505,54 @@ const App: React.FC = () => {
   const [sessionId, setSessionId] = useState('');
   const [pageScreenshot, setPageScreenshot] = useState('');
   const [captchaScreenshot, setCaptchaScreenshot] = useState('');
+  const [fallbackCaptcha, setFallbackCaptcha] = useState('3WBV43');
   const [portalFields, setPortalFields] = useState<MockPortalField[]>([]);
   const [activeFieldIndex, setActiveFieldIndex] = useState(-1);
   const [submitted, setSubmitted] = useState(false);
   const [showQuickEdit, setShowQuickEdit] = useState(false);
   const [portalViewMode, setPortalViewMode] = useState<'interactive' | 'screenshot'>('interactive');
-  const [portalPassword, setPortalPassword] = useState('ADmin@357');
+  // Bug 7: Citizen Desired Account Password (removed hardcoded 'ADmin@357')
+  const [portalPassword, setPortalPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [termsAccepted, setTermsAccepted] = useState(true);
+
+  const generateStrongPassword = () => {
+    const uppers = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+    const lowers = 'abcdefghijkmnopqrstuvwxyz';
+    const numbers = '23456789';
+    const specials = '!@#$%&*';
+
+    let pwd = '';
+    pwd += uppers.charAt(Math.floor(Math.random() * uppers.length));
+    pwd += lowers.charAt(Math.floor(Math.random() * lowers.length));
+    pwd += numbers.charAt(Math.floor(Math.random() * numbers.length));
+    pwd += specials.charAt(Math.floor(Math.random() * specials.length));
+
+    const all = uppers + lowers + numbers + specials;
+    for (let i = 0; i < 6; i++) {
+      pwd += all.charAt(Math.floor(Math.random() * all.length));
+    }
+    return pwd.split('').sort(() => 0.5 - Math.random()).join('');
+  };
+
+  const isPasswordValid = Boolean(
+    portalPassword &&
+    portalPassword.length >= 8 &&
+    /[A-Z]/.test(portalPassword) &&
+    /[a-z]/.test(portalPassword) &&
+    /\d/.test(portalPassword) &&
+    /[!@#$%^&*]/.test(portalPassword)
+  );
+
+  const refreshFallbackCaptcha = () => {
+    const chars = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
+    let code = '';
+    for (let i = 0; i < 6; i++) {
+      code += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    setFallbackCaptcha(code);
+    return code;
+  };
   const [selectedInstance, setSelectedInstance] = useState('National Portal (serviceonline.gov.in)');
   const [showInstanceMenu, setShowInstanceMenu] = useState(false);
   const [showEligibilityModal, setShowEligibilityModal] = useState(false);
@@ -898,6 +1047,14 @@ const App: React.FC = () => {
       showToast('Please confirm verification of your data first.', 'error');
       return;
     }
+    if (!portalPassword) {
+      showToast('Please choose an account password in Step 3 before proceeding.', 'error');
+      return;
+    }
+    if (!isPasswordValid) {
+      showToast('Password must be 8+ chars with uppercase, lowercase, numeric, and special characters.', 'error');
+      return;
+    }
     setCurrentStep(4);
     if (USE_MOCK) {
       runMockAgent();
@@ -906,9 +1063,19 @@ const App: React.FC = () => {
     setLoading(true);
     setAgentRunning(true);
     setAgentDone(false);
-    const portalName = selectedService?.portal_name || 'ServicePlus citizen registration portal';
-    const portalUrl = selectedService?.portal_url || 'serviceonline.gov.in';
-    const targetPortalId = selectedService?.portal_id || profile.target_portal_id || 'SERVICE_PLUS_REGISTRATION';
+
+    const targetServiceId = selectedService?.service_id || profile.target_service_id || '1784';
+    const isTargetVL =
+      targetServiceId === 'vidyalakshmi' ||
+      selectedService?.portal_id === 'VIDYA_LAKSHMI_PORTAL' ||
+      /vidya|lakshmi/i.test(targetServiceId) ||
+      /vidya|lakshmi/i.test(selectedService?.service_name || '') ||
+      /vidyalakshmi/i.test(selectedService?.portal_url || '');
+
+    const portalName = selectedService?.portal_name || (isTargetVL ? 'Vidya Lakshmi Portal (Ministry of Education & NSDL)' : 'ServicePlus citizen registration portal');
+    const portalUrl = selectedService?.portal_url || (isTargetVL ? 'https://www.vidyalakshmi.co.in/Students/' : 'https://serviceonline.gov.in/citizenRegistration.html');
+    const targetPortalId = selectedService?.portal_id || profile.target_portal_id || (isTargetVL ? 'VIDYA_LAKSHMI_PORTAL' : 'SERVICE_PLUS_REGISTRATION');
+
     setAgentLog([
       '🚀 Initializing Playwright browser in visible Chromium mode...',
       `🌐 Navigating to ${portalName} (${portalUrl})...`,
@@ -925,15 +1092,17 @@ const App: React.FC = () => {
       if (resp.page_preview_b64) setPageScreenshot(resp.page_preview_b64);
       if (resp.captcha_image_b64) setCaptchaScreenshot(resp.captcha_image_b64);
       setAgentRunning(false);
-      setAgentDone(true);
       if (resp.status === 'failed') {
+        setAgentDone(false);
         showToast(resp.message || 'Agent encountered an issue.', 'error');
         setAgentLog(prev => [...prev, `❌ [FAILED] ${resp.message || 'Agent failed to complete form.'}`]);
       } else {
+        setAgentDone(true);
         showToast(resp.message || 'Live agent completed filling fields. Please enter CAPTCHA.', 'success');
       }
     } catch (err: any) {
       setAgentRunning(false);
+      setAgentDone(false);
       const errMsg = err?.response?.data?.detail || err?.message || 'Failed to start agent.';
       setAgentLog((prev) => [...prev, `❌ [ERROR] ${errMsg}`]);
       showToast(`Failed to start agent: ${errMsg}`, 'error');
@@ -1138,7 +1307,7 @@ const App: React.FC = () => {
                   />
                   {!intent && (
                     <div className={`capsule-animated-placeholder ${fadeState ? 'fade-in' : 'fade-out'}`}>
-                      {PROMPTS_BY_MODE[activeMode][promptIndex % PROMPTS_BY_MODE[activeMode].length]}
+                      {activePrompts[promptIndex % (activePrompts.length || 1)]}
                     </div>
                   )}
                 </div>
@@ -1172,9 +1341,9 @@ const App: React.FC = () => {
                     setActiveMode('apply');
                     setPromptIndex(0);
                   }}
-                  title="Directly automate submission on ServicePlus portal with AI Agent"
+                  title="Directly automate submission on official portals with AI Agent"
                 >
-                  Auto-Apply
+                  ⚡ Auto-Apply
                 </button>
                 <button
                   type="button"
@@ -1185,30 +1354,53 @@ const App: React.FC = () => {
                   }}
                   title="Verify criteria, income limits, and required documents before applying"
                 >
-                  Check Eligibility
+                  🔍 Check Eligibility
                 </button>
               </div>
 
-              {/* Suggestion Rows */}
-              <div className="gemini-suggestions">
-                {SUGGESTIONS_BY_MODE[activeMode].map((item, idx) => (
+              {/* Bug 6: Dynamic Domain Category Filter Pills */}
+              <div className="gemini-domain-pills">
+                {DOMAIN_CATEGORIES.map((cat) => (
                   <button
-                    key={idx}
+                    key={cat.id}
                     type="button"
-                    className="suggestion-row"
+                    className={`domain-pill ${cat.id} ${selectedDomain === cat.id ? 'active' : ''}`}
                     onClick={() => {
-                      setIntent(item.text);
-                      handleIntentSubmit(item.text);
+                      setSelectedDomain(cat.id);
+                      setPromptIndex(0);
                     }}
                   >
-                    <span className="suggestion-lead-icon">
-                      {item.iconType === 'briefcase' && <Icons.Briefcase />}
-                      {item.iconType === 'sparkles' && <Icons.Sparkles />}
-                      {item.iconType === 'book' && <Icons.BookIdea />}
-                    </span>
-                    <span className="suggestion-text">{item.text}</span>
+                    <span>{cat.icon}</span>
+                    <span>{cat.label}</span>
                   </button>
                 ))}
+              </div>
+
+              {/* Suggestion Rows (Categorized by Domain with Category Badges) */}
+              <div className="gemini-suggestions">
+                {DOMAIN_SUGGESTIONS[activeMode]
+                  .filter((item) => selectedDomain === 'all' || item.domain === selectedDomain)
+                  .map((item, idx) => (
+                    <button
+                      key={idx}
+                      type="button"
+                      className="suggestion-row"
+                      onClick={() => {
+                        setIntent(item.text);
+                        handleIntentSubmit(item.text);
+                      }}
+                    >
+                      <span className="suggestion-lead-icon">
+                        {item.iconType === 'briefcase' && <Icons.Briefcase />}
+                        {item.iconType === 'sparkles' && <Icons.Sparkles />}
+                        {item.iconType === 'book' && <Icons.BookIdea />}
+                      </span>
+                      <span className="suggestion-text">{item.text}</span>
+                      <span className={`scheme-category-badge ${item.domain}`}>
+                        {item.domainLabel}
+                      </span>
+                    </button>
+                  ))}
               </div>
 
               {/* Dynamic Intent Match Card (Bugs 1 & 2) */}
@@ -1510,6 +1702,74 @@ const App: React.FC = () => {
                   })}
                 </div>
 
+                {/* Bug 7: Citizen Desired Account Password Choice */}
+                <div className="account-password-section">
+                  <div className="account-password-header">
+                    <div className="account-password-title">
+                      <span>🔐</span>
+                      <span>Desired Portal Account Password</span>
+                    </div>
+                    <button
+                      type="button"
+                      className="generate-password-btn"
+                      onClick={() => {
+                        const strong = generateStrongPassword();
+                        setPortalPassword(strong);
+                        showToast('Generated secure password matching official portal rules!', 'info');
+                      }}
+                      title="Generate a secure password meeting all ServicePlus requirements"
+                    >
+                      🎲 Suggest Secure Password
+                    </button>
+                  </div>
+                  <p className="account-password-desc">
+                    Choose the account password for your official portal registration. The AI agent will submit this password to register your citizen profile.
+                  </p>
+
+                  <div className="sp-password-wrap" style={{ maxWidth: '420px' }}>
+                    <input
+                      type={showPassword ? 'text' : 'password'}
+                      className="gemini-input sp-password-input"
+                      value={portalPassword}
+                      onChange={(e) => setPortalPassword(e.target.value)}
+                      placeholder="Choose account password (e.g. Citizen@2026)"
+                    />
+                    <button
+                      type="button"
+                      className="sp-password-toggle-btn"
+                      onClick={() => setShowPassword(!showPassword)}
+                      title={showPassword ? 'Hide password' : 'Show password'}
+                    >
+                      {showPassword ? '👁️' : '🔒'}
+                    </button>
+                  </div>
+
+                  {/* Real-time Rule Indicators */}
+                  <div className="password-rules-checklist">
+                    <span className={`rule-chip ${portalPassword.length >= 8 ? 'valid' : ''}`}>
+                      {portalPassword.length >= 8 ? '✓' : '•'} 8+ Characters
+                    </span>
+                    <span className={`rule-chip ${/[A-Z]/.test(portalPassword) ? 'valid' : ''}`}>
+                      {/[A-Z]/.test(portalPassword) ? '✓' : '•'} 1 Uppercase Letter
+                    </span>
+                    <span className={`rule-chip ${/[a-z]/.test(portalPassword) ? 'valid' : ''}`}>
+                      {/[a-z]/.test(portalPassword) ? '✓' : '•'} 1 Lowercase Letter
+                    </span>
+                    <span className={`rule-chip ${/\d/.test(portalPassword) ? 'valid' : ''}`}>
+                      {/\d/.test(portalPassword) ? '✓' : '•'} 1 Number
+                    </span>
+                    <span className={`rule-chip ${/[!@#$%^&*]/.test(portalPassword) ? 'valid' : ''}`}>
+                      {/[!@#$%^&*]/.test(portalPassword) ? '✓' : '•'} 1 Special (!@#$%^&*)
+                    </span>
+                  </div>
+                </div>
+
+                {!isPasswordValid && portalPassword.length > 0 && (
+                  <div className="field-validation-msg error" style={{ marginTop: '0.5rem' }}>
+                    ⚠️ Password does not meet all portal criteria yet. Click &quot;Suggest Secure Password&quot; if you need a quick compliant option.
+                  </div>
+                )}
+
                 {!isFormComplete && (
                   <div className="incomplete-fields-callout">
                     <div className="incomplete-title">
@@ -1615,8 +1875,26 @@ const App: React.FC = () => {
           {/* ════════════════════════════════════════
               STEP 4: SPLIT-SCREEN MISSION CONTROL
           ════════════════════════════════════════ */}
-          {currentStep === 4 && (
-            <div className="split-dashboard">
+          {currentStep === 4 && (() => {
+            const currentServiceId = selectedService?.service_id || profile.target_service_id || '1784';
+            const isVidyaLakshmi =
+              currentServiceId === 'vidyalakshmi' ||
+              selectedService?.portal_id === 'VIDYA_LAKSHMI_PORTAL' ||
+              /vidya|lakshmi/i.test(currentServiceId) ||
+              /vidya|lakshmi/i.test(selectedService?.service_name || '') ||
+              /vidyalakshmi/i.test(selectedService?.portal_url || '');
+
+            const currentPortalUrl =
+              selectedService?.portal_url ||
+              profile.target_portal_url ||
+              (isVidyaLakshmi ? 'https://www.vidyalakshmi.co.in/Students/' : 'https://serviceonline.gov.in/citizenRegistration.html');
+            const currentPortalName =
+              selectedService?.portal_name ||
+              profile.target_portal_name ||
+              (isVidyaLakshmi ? 'Vidya Lakshmi Portal' : 'National ServicePlus Portal');
+
+            return (
+              <div className="split-dashboard">
               {/* Left Column: Mission Controls */}
               <div className="control-panel">
                 <div className="gemini-card">
@@ -1671,11 +1949,47 @@ const App: React.FC = () => {
                       <img
                         src={`data:image/png;base64,${captchaScreenshot}`}
                         alt="Portal Captcha"
-                        style={{ maxWidth: '200px', borderRadius: '8px', marginBottom: '0.75rem' }}
+                        style={{ maxWidth: '200px', borderRadius: '8px', marginBottom: '0.75rem', border: '1px solid #334155' }}
                       />
                     ) : (
-                      <div className="captcha-display-box">
-                        <span className="captcha-styled-text">Xk7pQ2</span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
+                        <div className="sp-captcha-visual" style={{ width: '150px', height: '42px' }}>
+                          <span className="sp-mock-captcha-text">{fallbackCaptcha}</span>
+                        </div>
+                        <button
+                          type="button"
+                          className="sp-captcha-btn"
+                          title="Refresh CAPTCHA"
+                          onClick={async () => {
+                            if (sessionId) {
+                              showToast('Refetching fresh CAPTCHA from official portal...', 'info');
+                              await handleStartAgent();
+                            } else {
+                              const newCode = refreshFallbackCaptcha();
+                              showToast(`Refreshed CAPTCHA: ${newCode}`, 'info');
+                            }
+                          }}
+                        >
+                          🔄
+                        </button>
+                        <button
+                          type="button"
+                          className="sp-captcha-btn"
+                          title="Listen to CAPTCHA"
+                          onClick={() => {
+                            if ('speechSynthesis' in window) {
+                              const textToRead = captchaText || fallbackCaptcha;
+                              const utt = new SpeechSynthesisUtterance(textToRead.split('').join(' '));
+                              utt.rate = 0.8;
+                              window.speechSynthesis.speak(utt);
+                              showToast('Playing audio CAPTCHA...', 'info');
+                            } else {
+                              showToast('Audio playback not supported in this browser', 'info');
+                            }
+                          }}
+                        >
+                          🔊
+                        </button>
                       </div>
                     )}
 
@@ -1821,19 +2135,19 @@ const App: React.FC = () => {
                     <div className="browser-url-pill">
                       <span>🔒</span>
                       <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        https://serviceonline.gov.in/citizenRegistration.html
+                        {currentPortalUrl}
                       </span>
                     </div>
-                    <div className="live-portal-pill-badge" title="Live connection to Government of India Portal">
+                    <div className="live-portal-pill-badge" title={`Live connection to ${currentPortalName}`}>
                       <span className="live-dot-pulse" />
                       LIVE GOV.IN
                     </div>
                     <a
-                      href="https://serviceonline.gov.in/citizenRegistration.html"
+                      href={currentPortalUrl}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="portal-open-tab-btn"
-                      title="Open official ServicePlus portal directly in a new browser tab"
+                      title={`Open official ${currentPortalName} directly in a new browser tab`}
                     >
                       ↗ Open Tab
                     </a>
@@ -1848,6 +2162,295 @@ const App: React.FC = () => {
                         alt="Portal Live Screenshot"
                         style={{ width: '100%', borderRadius: '4px', boxShadow: '0 4px 16px rgba(0,0,0,0.1)' }}
                       />
+                    </div>
+                  ) : isVidyaLakshmi ? (
+                    /* ═══════════════════════════════════════════════════
+                       VIDYA LAKSHMI STUDENT REGISTRATION LAYOUT (Bug 3 & 5)
+                       ═══════════════════════════════════════════════════ */
+                    <div className="vidyalakshmi-live-container">
+                      <div className="vl-masthead">
+                        <div className="vl-branding-group">
+                          <div className="vl-emblem-badge" title="National Emblem of India">🎓</div>
+                          <div className="vl-logo-combo">
+                            <span className="vl-logo-title">
+                              विद्या लक्ष्मी • Vidya Lakshmi
+                            </span>
+                            <span className="vl-logo-subtitle">
+                              National Portal for Students Seeking Higher Education Scholarships & Loans (Govt. of India)
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="vl-top-nav">
+                          <span className="vl-nav-pill" onClick={() => showToast('Searching 140+ education loan schemes...', 'info')}>
+                            🔍 Loan Search
+                          </span>
+                          <span className="vl-nav-pill" onClick={() => showToast('Filtering National & State scholarships...', 'info')}>
+                            🎓 Scholarships
+                          </span>
+                          <span className="vl-nav-pill" onClick={() => showToast('Track status by CELAF application ID', 'info')}>
+                            📄 Track Status
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="vl-form-card">
+                        <div className="vl-card-header">
+                          <span className="vl-badge-edu">Ministry of Education & NSDL e-Gov</span>
+                          <div className="vl-card-title">Student Registration / Scholarship & Loan Application</div>
+                          <div className="vl-card-subtitle">
+                            Common Education Loan Application Form (CELAF) for Indian & Global Higher Studies
+                          </div>
+                        </div>
+
+                        {/* Student Name */}
+                        <div className="sp-form-row">
+                          <label className="sp-label">
+                            Student Full Name (as per 10th/12th Marksheet) <span className="sp-req">*</span>
+                          </label>
+                          <input
+                            type="text"
+                            className="sp-input"
+                            value={profile.full_name || ''}
+                            onChange={(e) => setProfile((prev) => ({ ...prev, full_name: e.target.value }))}
+                            placeholder="Enter full legal name"
+                          />
+                        </div>
+
+                        {/* Father's / Guardian's Name */}
+                        <div className="sp-form-row">
+                          <label className="sp-label">
+                            Father / Guardian Name <span className="sp-req">*</span>
+                          </label>
+                          <input
+                            type="text"
+                            className="sp-input"
+                            value={profile.father_or_guardian_name || ''}
+                            onChange={(e) => setProfile((prev) => ({ ...prev, father_or_guardian_name: e.target.value }))}
+                            placeholder="Enter father or guardian name"
+                          />
+                        </div>
+
+                        {/* Date of Birth & Gender Row */}
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                          <div className="sp-form-row">
+                            <label className="sp-label">
+                              Date of Birth <span className="sp-req">*</span>
+                            </label>
+                            <input
+                              type="date"
+                              className="sp-input"
+                              value={toIsoDate(profile.date_of_birth)}
+                              onChange={(e) => setProfile((prev) => ({ ...prev, date_of_birth: e.target.value }))}
+                              max={new Date().toISOString().split('T')[0]}
+                            />
+                          </div>
+
+                          <div className="sp-form-row">
+                            <label className="sp-label">
+                              Gender <span className="sp-req">*</span>
+                            </label>
+                            <select
+                              className="sp-input"
+                              value={profile.gender || 'male'}
+                              onChange={(e) => setProfile((prev) => ({ ...prev, gender: e.target.value }))}
+                            >
+                              <option value="male">Male</option>
+                              <option value="female">Female</option>
+                              <option value="other">Other</option>
+                            </select>
+                          </div>
+                        </div>
+
+                        {/* Mobile Number & Email */}
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                          <div className="sp-form-row">
+                            <label className="sp-label">
+                              Mobile Number <span className="sp-req">*</span>
+                            </label>
+                            <input
+                              type="tel"
+                              className="sp-input"
+                              value={profile.mobile_number || ''}
+                              onChange={(e) =>
+                                setProfile((prev) => ({
+                                  ...prev,
+                                  mobile_number: e.target.value.replace(/\D/g, '').slice(0, 10),
+                                }))
+                              }
+                              placeholder="10-digit mobile number"
+                            />
+                          </div>
+
+                          <div className="sp-form-row">
+                            <label className="sp-label">
+                              Email Address (Student ID) <span className="sp-req">*</span>
+                            </label>
+                            <input
+                              type="email"
+                              className="sp-input"
+                              value={profile.email || ''}
+                              onChange={(e) => setProfile((prev) => ({ ...prev, email: e.target.value }))}
+                              placeholder="student@example.com"
+                            />
+                          </div>
+                        </div>
+
+                        {/* Password */}
+                        <div className="sp-form-row">
+                          <label className="sp-label">
+                            Portal Account Password <span className="sp-req">*</span>
+                          </label>
+                          <div className="sp-password-wrap">
+                            <input
+                              type={showPassword ? 'text' : 'password'}
+                              className="sp-input sp-password-input"
+                              value={portalPassword}
+                              onChange={(e) => setPortalPassword(e.target.value)}
+                              placeholder="Choose student account password"
+                            />
+                            <button
+                              type="button"
+                              className="sp-password-toggle-btn"
+                              onClick={() => setShowPassword(!showPassword)}
+                              title={showPassword ? 'Hide password' : 'Show password'}
+                            >
+                              {showPassword ? '👁️' : '🔒'}
+                            </button>
+                          </div>
+                          <div className="sp-password-note" style={{ color: '#0369a1' }}>
+                            ✓ Password set during verification. Minimum 8 chars with uppercase, lowercase, numeric and special symbol.
+                          </div>
+                        </div>
+
+                        {/* State & Family Income */}
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                          <div className="sp-form-row">
+                            <label className="sp-label">
+                              State of Domicile <span className="sp-req">*</span>
+                            </label>
+                            <select
+                              className="sp-input"
+                              value={profile.state ? profile.state.toUpperCase() : 'UTTAR PRADESH'}
+                              onChange={(e) => setProfile((prev) => ({ ...prev, state: e.target.value }))}
+                            >
+                              <option value="ANDHRA PRADESH">ANDHRA PRADESH</option>
+                              <option value="BIHAR">BIHAR</option>
+                              <option value="DELHI">DELHI</option>
+                              <option value="GUJARAT">GUJARAT</option>
+                              <option value="HARYANA">HARYANA</option>
+                              <option value="KARNATAKA">KARNATAKA</option>
+                              <option value="KERALA">KERALA</option>
+                              <option value="MADHYA PRADESH">MADHYA PRADESH</option>
+                              <option value="MAHARASHTRA">MAHARASHTRA</option>
+                              <option value="PUNJAB">PUNJAB</option>
+                              <option value="RAJASTHAN">RAJASTHAN</option>
+                              <option value="TAMIL NADU">TAMIL NADU</option>
+                              <option value="TELANGANA">TELANGANA</option>
+                              <option value="UTTAR PRADESH">UTTAR PRADESH</option>
+                              <option value="WEST BENGAL">WEST BENGAL</option>
+                            </select>
+                          </div>
+
+                          <div className="sp-form-row">
+                            <label className="sp-label">
+                              Annual Family Income (₹) <span className="sp-req">*</span>
+                            </label>
+                            <input
+                              type="number"
+                              className="sp-input"
+                              value={profile.annual_income || ''}
+                              onChange={(e) => setProfile((prev) => ({ ...prev, annual_income: Number(e.target.value) }))}
+                              placeholder="e.g. 250000"
+                            />
+                          </div>
+                        </div>
+
+                        {/* Security Verification (CAPTCHA) */}
+                        <div className="sp-captcha-container">
+                          <label className="sp-label" style={{ marginBottom: '0.4rem', display: 'block' }}>
+                            Security Verification <span className="sp-req">*</span>
+                          </label>
+                          <div className="sp-captcha-flex-row">
+                            <div className="sp-captcha-visual">
+                              {captchaScreenshot ? (
+                                <img
+                                  src={`data:image/png;base64,${captchaScreenshot}`}
+                                  alt="Live Portal CAPTCHA"
+                                />
+                              ) : (
+                                <span className="sp-mock-captcha-text">{fallbackCaptcha}</span>
+                              )}
+                            </div>
+                            <button
+                              type="button"
+                              className="sp-captcha-btn"
+                              title="Refresh CAPTCHA"
+                              onClick={async () => {
+                                if (sessionId) {
+                                  showToast('Refetching fresh CAPTCHA from Vidya Lakshmi portal...', 'info');
+                                  await handleStartAgent();
+                                } else {
+                                  const newCode = refreshFallbackCaptcha();
+                                  showToast(`Refreshed CAPTCHA: ${newCode}`, 'info');
+                                }
+                              }}
+                            >
+                              🔄
+                            </button>
+                            <button
+                              type="button"
+                              className="sp-captcha-btn"
+                              title="Listen to CAPTCHA"
+                              onClick={() => {
+                                if ('speechSynthesis' in window) {
+                                  const textToRead = captchaText || fallbackCaptcha;
+                                  const utt = new SpeechSynthesisUtterance(textToRead.split('').join(' '));
+                                  utt.rate = 0.8;
+                                  window.speechSynthesis.speak(utt);
+                                  showToast('Playing audio CAPTCHA...', 'info');
+                                } else {
+                                  showToast('Audio playback not supported in this browser', 'info');
+                                }
+                              }}
+                            >
+                              🔊
+                            </button>
+                            <input
+                              type="text"
+                              className="sp-input sp-captcha-text-input"
+                              placeholder="Enter Captcha"
+                              value={captchaText}
+                              onChange={(e) => setCaptchaText(e.target.value)}
+                            />
+                          </div>
+                        </div>
+
+                        {/* Terms and Conditions */}
+                        <div className="sp-terms-group">
+                          <input
+                            type="checkbox"
+                            id="vl-terms-input"
+                            checked={termsAccepted}
+                            onChange={(e) => setTermsAccepted(e.target.checked)}
+                          />
+                          <label htmlFor="vl-terms-input">
+                            I declare that the information provided is correct and I accept the terms & conditions of the Vidya Lakshmi Portal (Ministry of Education & NSDL).
+                          </label>
+                        </div>
+
+                        {/* Single Primary Action Button */}
+                        <div className="sp-form-actions">
+                          <button
+                            type="button"
+                            className="vl-btn-register"
+                            disabled={!captchaText || loading || !termsAccepted}
+                            onClick={() => handleResume('SUBMIT')}
+                          >
+                            {loading ? 'Submitting to Vidya Lakshmi…' : 'Submit Registration & Apply for Education Schemes'}
+                          </button>
+                        </div>
+                      </div>
                     </div>
                   ) : (
                     <div className="serviceplus-live-container">
@@ -2011,7 +2614,7 @@ const App: React.FC = () => {
                             </button>
                           </div>
                           <div className="sp-password-note">
-                            Note: Password should be at least '8' characters with at least one special character(!@#$%^&*), one numeric, one small case and one upper case letter (i.e ADmin@357)
+                            Note: Password should be at least '8' characters with at least one special character(!@#$%^&*), one numeric, one small case and one upper case letter (e.g. Citizen@2026)
                           </div>
                         </div>
 
@@ -2062,7 +2665,7 @@ const App: React.FC = () => {
                                   alt="Live Portal CAPTCHA"
                                 />
                               ) : (
-                                <span className="sp-mock-captcha-text">2MJ5D5</span>
+                                <span className="sp-mock-captcha-text">{fallbackCaptcha}</span>
                               )}
                             </div>
                             <button
@@ -2070,8 +2673,13 @@ const App: React.FC = () => {
                               className="sp-captcha-btn"
                               title="Refresh CAPTCHA"
                               onClick={async () => {
-                                showToast('Refetching fresh CAPTCHA from official portal...', 'info');
-                                await handleStartAgent();
+                                if (sessionId) {
+                                  showToast('Refetching fresh CAPTCHA from official portal...', 'info');
+                                  await handleStartAgent();
+                                } else {
+                                  const newCode = refreshFallbackCaptcha();
+                                  showToast(`Refreshed CAPTCHA: ${newCode}`, 'info');
+                                }
                               }}
                             >
                               🔄
@@ -2082,7 +2690,7 @@ const App: React.FC = () => {
                               title="Listen to CAPTCHA"
                               onClick={() => {
                                 if ('speechSynthesis' in window) {
-                                  const textToRead = captchaText || '3 W B V 4 3';
+                                  const textToRead = captchaText || fallbackCaptcha;
                                   const utt = new SpeechSynthesisUtterance(textToRead.split('').join(' '));
                                   utt.rate = 0.8;
                                   window.speechSynthesis.speak(utt);
@@ -2134,8 +2742,8 @@ const App: React.FC = () => {
                   )}
                 </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
         </div>
       </main>
 

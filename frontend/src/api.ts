@@ -107,6 +107,11 @@ export const matchIntentFallback = (query: string): IntentClassificationResponse
     return KNOWN_SERVICES_CATALOG[1]; // ServicePlus 1784
   }
 
+  // Citizen Certificates (Income, Caste, Domicile, Residence)
+  if (/certificate|caste|income|domicile|residence|praman|patra|birth|death|bonafide/i.test(q)) {
+    return KNOWN_SERVICES_CATALOG[4]; // General ServicePlus e-District
+  }
+
   // Default: General ServicePlus Citizen Registration
   return KNOWN_SERVICES_CATALOG[4];
 };
