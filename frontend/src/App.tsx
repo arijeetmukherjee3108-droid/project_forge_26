@@ -173,10 +173,16 @@ const MOCK_AGENT_STEPS: { action: string; field: MockPortalField }[] = [
   { action: '🔒 [PAUSE] Captcha detected. Cropped and waiting for citizen approval.', field: { label: '', value: '', type: 'text' } },
 ];
 
+const ROTATING_PROMPTS = [
+  'Apply for Construction Worker Welfare Certificate on ServicePlus',
+  'Citizen Registration on National ServicePlus Portal',
+  'Direct Apply — Form 1784 (serviceonline.gov.in)',
+];
+
 const SUGGESTIONS = [
   { icon: '💼', text: 'Apply for Construction Worker Welfare Certificate on ServicePlus' },
   { icon: '🏛️', text: 'Citizen Registration on National ServicePlus Portal' },
-  { icon: '📑', text: 'Direct Apply — Form 1784 (serviceonline.gov.in)' },
+  { icon: '📄', text: 'Direct Apply — Form 1784 (serviceonline.gov.in)' },
 ];
 
 const STEPS = [
@@ -215,6 +221,21 @@ const App: React.FC = () => {
   // Step 1: Intent
   const [intent, setIntent] = useState('');
   const [isListening, setIsListening] = useState(false);
+  const [promptIndex, setPromptIndex] = useState(0);
+  const [fadeState, setFadeState] = useState(true);
+
+  // Smoothly rotate the placeholder text every 4 seconds
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setFadeState(false);
+      setTimeout(() => {
+        setPromptIndex((prev) => (prev + 1) % ROTATING_PROMPTS.length);
+        setFadeState(true);
+      }, 400);
+    }, 4000);
+
+    return () => clearInterval(interval);
+  }, []);
 
   // Step 2: Upload
   const [file, setFile] = useState<File | null>(null);
@@ -598,32 +619,22 @@ const App: React.FC = () => {
 
               {/* Pill Prompt Capsule */}
               <div className="gemini-search-capsule">
-                <button
-                  className="capsule-plus-btn"
-                  onClick={() => {
-                    fileInputRef.current?.click();
-                    setCurrentStep(2);
-                  }}
-                  title="Attach Document"
-                >
-                  +
-                </button>
-
-                <input
-                  className="capsule-input"
-                  type="text"
-                  placeholder="Type @ for connectors, skills and more"
-                  value={intent}
-                  onChange={(e) => setIntent(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && handleIntentSubmit()}
-                />
+                <div className="capsule-input-container">
+                  <input
+                    className="capsule-input"
+                    type="text"
+                    value={intent}
+                    onChange={(e) => setIntent(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && handleIntentSubmit()}
+                  />
+                  {!intent && (
+                    <div className={`capsule-animated-placeholder ${fadeState ? 'fade-in' : 'fade-out'}`}>
+                      {ROTATING_PROMPTS[promptIndex]}
+                    </div>
+                  )}
+                </div>
 
                 <div className="capsule-actions">
-                  <div className="model-pill" title="Target Engine">
-                    <span>Argon</span>
-                    <span style={{ fontSize: '0.65rem' }}>▾</span>
-                  </div>
-
                   <button
                     className={`capsule-icon-btn ${isListening ? 'recording' : ''}`}
                     onClick={handleToggleVoice}

@@ -367,7 +367,7 @@ html, body, #root {
   background: var(--gemini-input-bg);
   border: 1px solid var(--gemini-border-light);
   border-radius: 28px;
-  padding: 0.35rem 0.55rem 0.35rem 0.85rem;
+  padding: 0.45rem 0.65rem 0.45rem 1.4rem;
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -381,67 +381,52 @@ html, body, #root {
   background: #252628;
 }
 
-.capsule-plus-btn {
-  background: none;
-  border: none;
-  color: var(--gemini-text-muted);
-  font-size: 1.35rem;
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
+.capsule-input-container {
+  flex: 1;
+  position: relative;
   display: flex;
   align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  transition: all 0.2s;
-  flex-shrink: 0;
-}
-
-.capsule-plus-btn:hover {
-  background: rgba(255, 255, 255, 0.08);
-  color: var(--gemini-text);
+  min-height: 42px;
 }
 
 .capsule-input {
-  flex: 1;
+  width: 100%;
   background: transparent;
   border: none;
   outline: none;
   color: var(--gemini-text);
-  font-size: 1rem;
+  font-size: 1.02rem;
   font-family: inherit;
   padding: 0.65rem 0;
+  position: relative;
+  z-index: 2;
 }
 
-.capsule-input::placeholder {
+.capsule-animated-placeholder {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
   color: var(--gemini-text-muted);
-  font-weight: 400;
+  font-size: 1.02rem;
+  pointer-events: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 96%;
+  transition: opacity 0.4s cubic-bezier(0.4, 0, 0.2, 1), transform 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  z-index: 1;
+  user-select: none;
 }
 
-.capsule-actions {
-  display: flex;
-  align-items: center;
-  gap: 0.3rem;
-  flex-shrink: 0;
+.capsule-animated-placeholder.fade-in {
+  opacity: 1;
+  transform: translateY(-50%);
 }
 
-.model-pill {
-  background: var(--gemini-surface);
-  border: 1px solid var(--gemini-border);
-  color: var(--gemini-text-secondary);
-  border-radius: 20px;
-  padding: 0.32rem 0.75rem;
-  font-size: 0.8rem;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: 0.35rem;
-  transition: all 0.2s;
-}
-
-.model-pill:hover {
-  background: var(--gemini-surface-hover);
-  color: var(--gemini-text);
+.capsule-animated-placeholder.fade-out {
+  opacity: 0;
+  transform: translateY(-60%);
 }
 
 .capsule-icon-btn {
