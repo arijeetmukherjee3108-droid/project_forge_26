@@ -381,6 +381,7 @@ const App: React.FC = () => {
   const [portalFields, setPortalFields] = useState<MockPortalField[]>([]);
   const [activeFieldIndex, setActiveFieldIndex] = useState(-1);
   const [submitted, setSubmitted] = useState(false);
+  const [showQuickEdit, setShowQuickEdit] = useState(false);
 
   // UI helpers
   const [loading, setLoading] = useState(false);
@@ -1555,6 +1556,77 @@ const App: React.FC = () => {
                     Stop Agent
                   </button>
                 </div>
+
+                {/* Quick Edit Citizen Details in Step 4 */}
+                <div className="quick-edit-container">
+                  <button
+                    type="button"
+                    className="quick-edit-toggle-btn"
+                    onClick={() => setShowQuickEdit(!showQuickEdit)}
+                  >
+                    <span>✏️ {showQuickEdit ? 'Close Details Editor' : 'Edit Citizen Details & Re-fill'}</span>
+                    <span style={{ fontSize: '0.8rem' }}>{showQuickEdit ? '▲' : '▼'}</span>
+                  </button>
+
+                  {showQuickEdit && (
+                    <div className="quick-edit-body">
+                      <div className="quick-edit-field">
+                        <label>Full Name</label>
+                        <input
+                          type="text"
+                          className="gemini-input"
+                          value={profile.full_name || ''}
+                          onChange={(e) => setProfile((prev) => ({ ...prev, full_name: e.target.value }))}
+                        />
+                      </div>
+                      <div className="quick-edit-field">
+                        <label>Email Address</label>
+                        <input
+                          type="email"
+                          className="gemini-input"
+                          value={profile.email || ''}
+                          onChange={(e) => setProfile((prev) => ({ ...prev, email: e.target.value }))}
+                        />
+                      </div>
+                      <div className="quick-edit-field">
+                        <label>Mobile Number</label>
+                        <input
+                          type="tel"
+                          maxLength={10}
+                          className="gemini-input"
+                          value={profile.mobile_number || ''}
+                          onChange={(e) =>
+                            setProfile((prev) => ({
+                              ...prev,
+                              mobile_number: e.target.value.replace(/\D/g, '').slice(0, 10),
+                            }))
+                          }
+                        />
+                      </div>
+                      <div className="quick-edit-field">
+                        <label>State</label>
+                        <input
+                          type="text"
+                          className="gemini-input"
+                          value={profile.state || ''}
+                          onChange={(e) => setProfile((prev) => ({ ...prev, state: e.target.value }))}
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        className="gemini-btn gemini-btn-primary"
+                        style={{ width: '100%', marginTop: '0.5rem' }}
+                        disabled={loading}
+                        onClick={async () => {
+                          setShowQuickEdit(false);
+                          await handleStartAgent();
+                        }}
+                      >
+                        🔄 Update & Re-fill Portal Form
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
 
               {/* Right Column: Live Portal Display */}
@@ -1565,9 +1637,26 @@ const App: React.FC = () => {
                     <span className="light min" />
                     <span className="light max" />
                   </div>
-                  <div className="browser-url-pill">
-                    <span>🔒</span>
-                    <span>https://serviceonline.gov.in/directApply.do?serviceId=1784</span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flex: 1, minWidth: 0 }}>
+                    <div className="browser-url-pill">
+                      <span>🔒</span>
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        https://serviceonline.gov.in/citizenRegistration.html
+                      </span>
+                    </div>
+                    <div className="live-portal-pill-badge" title="Live connection to Government of India Portal">
+                      <span className="live-dot-pulse" />
+                      LIVE GOV.IN
+                    </div>
+                    <a
+                      href="https://serviceonline.gov.in/citizenRegistration.html"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="portal-open-tab-btn"
+                      title="Open official ServicePlus portal directly in a new browser tab"
+                    >
+                      ↗ Open Tab
+                    </a>
                   </div>
                 </div>
 
