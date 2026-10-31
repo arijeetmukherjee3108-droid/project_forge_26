@@ -398,6 +398,81 @@ class ApplyResumeResponse(BaseModel):
     )
 
 
+# ---------- e) Google Vault — POST /api/documents/google-search & google-fetch
+
+class VaultCandidate(BaseModel):
+    """A single file candidate found in Google Drive or Gmail."""
+
+    id: str = Field(
+        description="File ID (Drive file ID or Gmail messageId/attachmentId composite).",
+    )
+    name: str = Field(
+        description="Original filename (e.g. 'Income_Certificate_2025.pdf').",
+    )
+    source: str = Field(
+        description="Where the file was found: 'Google Drive' or 'Gmail'.",
+    )
+    mime_type: str = Field(
+        description="MIME type of the file (e.g. 'application/pdf').",
+    )
+    size_kb: Optional[float] = Field(
+        default=None,
+        description="File size in kilobytes (may be None if unknown).",
+    )
+    modified_date: Optional[str] = Field(
+        default=None,
+        description="Last modified date in YYYY-MM-DD format (may be None).",
+    )
+
+
+class GoogleSearchRequest(BaseModel):
+    """Request body for POST /api/documents/google-search."""
+
+    query: str = Field(
+        description="Search keyword (e.g. 'income certificate', 'marksheet').",
+    )
+    access_token: Optional[str] = Field(
+        default=None,
+        description="OAuth2 access_token from the Google sign-in popup.",
+    )
+    demo_mode: bool = Field(
+        default=False,
+        description="If True, returns synthetic demo candidates without calling Google APIs.",
+    )
+
+
+class GoogleSearchResponse(BaseModel):
+    """Response body for POST /api/documents/google-search."""
+
+    query: str = Field(
+        description="Echo of the search query.",
+    )
+    candidates: list[VaultCandidate] = Field(
+        default_factory=list,
+        description="List of matching files the citizen can pick from.",
+    )
+
+
+class GoogleFetchRequest(BaseModel):
+    """Request body for POST /api/documents/google-fetch."""
+
+    file_id: str = Field(
+        description="ID of the file to download (from VaultCandidate.id).",
+    )
+    source: str = Field(
+        default="drive",
+        description="Source of the file: 'drive' or 'gmail'.",
+    )
+    access_token: Optional[str] = Field(
+        default=None,
+        description="OAuth2 access_token from the Google sign-in popup.",
+    )
+    demo_mode: bool = Field(
+        default=False,
+        description="If True, generates a synthetic PDF without calling Google APIs.",
+    )
+
+
 # ---------- compressor.prepare_for_upload return type ----------------------
 
 class PreparedFile(BaseModel):

@@ -8,6 +8,7 @@ Used by browser_agent.py to drive any portal generically.
 """
 
 from enum import Enum
+from pathlib import Path
 from typing import Dict, List, Optional
 from pydantic import BaseModel, Field
 
@@ -115,10 +116,12 @@ _SERVICE_PLUS = PortalConfig(
     ],
 )
 
+_STATIC_MOCK_HTML = (Path(__file__).resolve().parent.parent / "static" / "mock_portal.html").resolve()
+
 _LOCAL_MOCK = PortalConfig(
     portal_id="LOCAL_MOCK_PORTAL",
     name="Local Mock Portal — Offline Demo Fallback",
-    entry_url="http://localhost:8000/mock_portal.html",
+    entry_url=f"file://{_STATIC_MOCK_HTML}",
     ignore_https_errors=False,
     captcha_image_selectors=["#captchaImage"],
     captcha_input_selectors=["#captchaAnswer"],
