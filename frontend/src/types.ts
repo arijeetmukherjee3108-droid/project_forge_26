@@ -46,14 +46,26 @@ export interface ExtractionResponse {
   message: string;
 }
 
+export interface RuleResult {
+  rule_id: string;
+  description?: string;
+  passed: boolean;
+  explanation: string;
+}
+
 /**
  * Mirrors EligibilityResponse in backend/app/schemas.py
  * Returned by POST /api/eligibility
  */
 export interface EligibilityResponse {
-  status: 'ELIGIBLE' | 'INELIGIBLE' | 'MISSING_INFO';
+  eligible?: boolean;
+  service_name?: string;
+  results?: RuleResult[];
+  summary?: string;
+  // Legacy / mock fallback support
+  status?: string;
   scheme_name?: string;
-  reasons: string[];
+  reasons?: string[];
   missing_fields?: string[];
   required_documents?: string[];
 }

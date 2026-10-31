@@ -178,8 +178,17 @@ const MOCK_EXTRACTION: ExtractionResponse = {
 };
 
 const MOCK_ELIGIBILITY: EligibilityResponse = {
+  eligible: true,
   status: 'ELIGIBLE',
+  service_name: 'ServicePlus – Citizen Certificate Application',
   scheme_name: 'ServicePlus – Citizen Certificate Application',
+  summary: 'All eligibility requirements for ServicePlus Citizen Certificate are satisfied.',
+  results: [
+    { rule_id: 'min_age', description: 'Age criteria', passed: true, explanation: 'Age matches certificate criteria (18+)' },
+    { rule_id: 'mobile_valid', description: 'Mobile verified', passed: true, explanation: 'Valid 10-digit citizen mobile number verified' },
+    { rule_id: 'domicile_match', description: 'State domicile', passed: true, explanation: 'State domicile matches Uttar Pradesh' },
+    { rule_id: 'income_ceiling', description: 'Income limit', passed: true, explanation: 'Annual family income is under ₹2,50,000 threshold' },
+  ],
   reasons: [
     '✅ Age matches certificate criteria (18+)',
     '✅ Valid 10-digit citizen mobile number verified',
@@ -1218,19 +1227,44 @@ const App: React.FC = () => {
               </div>
 
               {/* Eligibility card */}
-              {eligibility && (
-                <div className={`eligibility-banner status-${eligibility.status.toLowerCase()}`}>
-                  <div className="banner-header">
-                    <span>{eligibility.status === 'ELIGIBLE' ? '✅' : '⚠️'}</span>
-                    <span>{eligibility.status}: {eligibility.scheme_name.replace(/\s*\(ID:\s*\d+\)/gi, '')}</span>
+              {eligibility && (() => {
+                const isEligible = Boolean(eligibility.eligible ?? (eligibility.status === 'ELIGIBLE'));
+                const statusClass = isEligible ? 'status-eligible' : 'status-ineligible';
+                const statusText = isEligible ? 'ELIGIBLE' : 'INELIGIBLE';
+                const serviceNameClean = (eligibility.service_name || eligibility.scheme_name || 'ServicePlus Application')
+                  .replace(/\s*\(ID:\s*\d+\)/gi, '')
+                  .replace(/\s*\(ServicePlus\s*\d+\)/gi, '');
+
+                return (
+                  <div className={`eligibility-banner ${statusClass}`}>
+                    <div className="banner-header">
+                      <span>{isEligible ? '✅' : '⚠️'}</span>
+                      <span>{statusText}: {serviceNameClean}</span>
+                    </div>
+
+                    {eligibility.summary && (
+                      <p style={{ margin: '0.4rem 0 0.8rem', fontSize: '0.88rem', color: isEligible ? 'rgba(255,255,255,0.85)' : '#f2b8b5' }}>
+                        {eligibility.summary}
+                      </p>
+                    )}
+
+                    <ul className="banner-reasons">
+                      {eligibility.results && eligibility.results.length > 0 ? (
+                        eligibility.results.map((r, i) => (
+                          <li key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem', marginBottom: '0.35rem' }}>
+                            <span>{r.passed ? '✅' : '❌'}</span>
+                            <span>{r.explanation || r.description || r.rule_id}</span>
+                          </li>
+                        ))
+                      ) : eligibility.reasons ? (
+                        eligibility.reasons.map((r, i) => (
+                          <li key={i}>{r}</li>
+                        ))
+                      ) : null}
+                    </ul>
                   </div>
-                  <ul className="banner-reasons">
-                    {eligibility.reasons.map((r, i) => (
-                      <li key={i}>{r}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
+                );
+              })()}
             </div>
           )}
 
