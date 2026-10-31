@@ -18,9 +18,12 @@ import re
 from datetime import datetime
 from typing import Optional
 
-import fitz  # PyMuPDF
+import pymupdf as fitz  # PyMuPDF (pymupdf alias removes FutureWarning)
 
-from app.schemas import Category, CitizenProfile, ExtractResponse, Gender
+try:
+    from app.schemas import Category, CitizenProfile, ExtractResponse, Gender
+except ImportError:
+    from backend.app.schemas import Category, CitizenProfile, ExtractResponse, Gender
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -264,39 +267,80 @@ def _extract_text_from_pdf(file_bytes: bytes) -> tuple[str, bool]:
     return full_text, needs_ocr
 
 
-def _ocr_image_bytes(image_bytes: bytes, mime_hint: str = "png") -> str:
-    """
-    Run pytesseract on raw image bytes.
-    Returns extracted text, or raises ImportError / OSError if unavailable.
-    """
-    try:
-        import pytesseract  # type: ignore
-        from PIL import Image  # type: ignore
-        import io
+# Safely build the set of OCR exceptions we want to catch at call sites.
+# If pytesseract is not installed at all, TesseractNotFoundError doesn't exist,
+# so we fall back to a plain Exception subclass that will never be raised.
+try:
+    from pytesseract import TesseractNotFoundError as _TesseractNotFoundError  # type: ignore
+except ImportError:
+    class _TesseractNotFoundError(Exception):  # type: ignore
+        pass
 
-        img = Image.open(io.BytesIO(image_bytes))
-        return pytesseract.image_to_string(img)
-    except ImportError as exc:
-        raise ImportError("pytesseract or Pillow not installed") from exc
+# Tuple used in all except clauses below.
+_OCR_ERRORS = (ImportError, _TesseractNotFoundError, OSError)
+
+
+def _ocr_image_bytes(image_bytes: bytes) -> str:
+    """
+    Run pytesseract on raw image bytes with phone-photo fixes applied.
+
+    Improvements over the old version:
+    - EXIF transpose: corrects phone rotation.
+    - Grayscale + autocontrast: improves OCR on faded/bright photos.
+    - Upscale to ≥ 1600 px wide: Tesseract accuracy degrades on small images.
+    - lang="eng+hin" with automatic fallback to "eng" if Hindi data is missing.
+
+    Raises _OCR_ERRORS on any library/binary problem (caller handles these).
+    Nothing is written to disk.
+    """
+    import io
+    import pytesseract  # type: ignore
+    from PIL import Image, ImageOps  # type: ignore
+
+    img = Image.open(io.BytesIO(image_bytes))
+
+    # Fix EXIF rotation (phone photos are often rotated 90°/270°)
+    img = ImageOps.exif_transpose(img)
+
+    # Grayscale → better contrast for OCR
+    img = img.convert("L")
+
+    # Autocontrast: stretch histogram to use full 0-255 range
+    img = ImageOps.autocontrast(img)
+
+    # Upscale if narrower than 1600 px (keeps aspect ratio)
+    if img.width < 1600:
+        scale = 1600 / img.width
+        img = img.resize(
+            (1600, int(img.height * scale)),
+            Image.LANCZOS,
+        )
+
+    # Try bilingual first; fall back to English-only if Hindi data is missing
+    try:
+        return pytesseract.image_to_string(img, lang="eng+hin")
+    except _TesseractNotFoundError:
+        raise  # binary missing — let caller handle
+    except Exception:  # language data not installed
+        return pytesseract.image_to_string(img, lang="eng")
 
 
 def _ocr_pdf_bytes(file_bytes: bytes) -> str:
-    """Render each PDF page to an image and OCR it."""
-    try:
-        import pytesseract  # type: ignore
-        from PIL import Image  # type: ignore
-        import io
-
-        doc = fitz.open(stream=file_bytes, filetype="pdf")
-        texts: list[str] = []
-        for page in doc:
-            pix = page.get_pixmap(dpi=200)
-            img = Image.open(io.BytesIO(pix.tobytes("png")))
-            texts.append(pytesseract.image_to_string(img))
-        doc.close()
-        return "\n".join(texts)
-    except ImportError as exc:
-        raise ImportError("pytesseract or Pillow not installed") from exc
+    """
+    Render up to 5 pages of a scanned PDF to PNG (in memory) and OCR each.
+    Uses the same improved _ocr_image_bytes helper as the image path.
+    Raises _OCR_ERRORS on any library/binary problem (caller handles these).
+    """
+    doc = fitz.open(stream=file_bytes, filetype="pdf")
+    texts: list[str] = []
+    for i, page in enumerate(doc):
+        if i >= 5:  # cap at 5 pages to keep response times reasonable
+            break
+        # Render page to PNG bytes entirely in memory (dpi=200 balances quality/speed)
+        png_bytes = page.get_pixmap(dpi=200).tobytes("png")
+        texts.append(_ocr_image_bytes(png_bytes))
+    doc.close()
+    return "\n".join(texts)
 
 
 # ---------------------------------------------------------------------------
@@ -471,27 +515,31 @@ def extract_profile(file_bytes: bytes, filename: str) -> ExtractResponse:
     ocr_warning: Optional[str] = None
 
     # ---- Text extraction
+    _INSTALL_HINT = (
+        "Run: brew install tesseract tesseract-lang && pip install pytesseract pillow"
+    )
     if ext == ".pdf":
         selectable_text, needs_ocr = _extract_text_from_pdf(file_bytes)
         if needs_ocr:
             try:
                 raw_text = _ocr_pdf_bytes(file_bytes)
-            except ImportError:
+            except _OCR_ERRORS:
                 ocr_warning = (
-                    "OCR is unavailable (Tesseract not installed). "
-                    "Please install Tesseract and pytesseract, or upload a text-PDF."
+                    "OCR unavailable for this scanned PDF. "
+                    "Tesseract must be installed on the server. "
+                    + _INSTALL_HINT
                 )
-                raw_text = selectable_text  # use whatever we have
+                raw_text = selectable_text  # use whatever selectable text exists
         else:
             raw_text = selectable_text
     else:
-        # Image file
+        # Image file — requires Tesseract
         try:
             raw_text = _ocr_image_bytes(file_bytes)
-        except ImportError:
+        except _OCR_ERRORS:
             ocr_warning = (
-                "OCR is unavailable (Tesseract not installed). "
-                "Cannot read image files. Please install Tesseract and pytesseract."
+                "OCR unavailable. Tesseract must be installed to read image files. "
+                + _INSTALL_HINT
             )
 
     # ---- If OCR totally unavailable, return a safe empty response

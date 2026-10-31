@@ -12,7 +12,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from backend.app.schemas import CitizenProfile
-from backend.app.browser_agent import start_application, resume_application
+from backend.app.browser_agent import start_application, resume_application, close_session
 
 
 async def main():
@@ -62,17 +62,25 @@ async def main():
                 session_id=response.session_id,
                 captcha_text=captcha_input,
                 approve=True,
+                submit_final=False,
+                close_browser=False,
             )
+            print("-" * 60)
             print(f"Final Status:  {resume_res.status.value}")
             print(f"Final Message: {resume_res.message}")
             print(f"Screenshot:    {'✅ Captured' if resume_res.final_screenshot_b64 else 'None'}")
+            print("-" * 60)
+            print("\n👀 INSPECTION MODE: Look at the open Chromium window on your screen!")
+            print("   - All applicant fields are filled.")
+            print("   - CAPTCHA was entered.")
+            print("   - Submit button is highlighted in glowing emerald green.")
+            print("   Take as long as you want to verify everything.\n")
+            input("👉 Press Enter whenever you are satisfied to close the browser: ")
+            print("Closing browser and cleaning up temp files...")
+            await close_session(response.session_id)
         else:
             print("Aborted by user. Cleaning up session...")
-            await resume_application(
-                session_id=response.session_id,
-                captcha_text="",
-                approve=False,
-            )
+            await close_session(response.session_id)
 
     print("\n✅ Test finished.")
 

@@ -107,10 +107,22 @@ def get_session(session_id: str) -> BrowserSession:
 
 
 async def close_session(session_id: str) -> None:
-    """Gracefully tear down browser handles and remove the session."""
+    """Gracefully tear down browser handles, clean up temp files, and remove session."""
     session = _active_sessions.pop(session_id, None)
     if session is None:
         return
+
+    # Clean up temporary uploaded file if within uploads directory
+    if session.document_path:
+        try:
+            doc_path = Path(session.document_path).resolve()
+            uploads_dir = _UPLOADS_DIR.resolve()
+            if doc_path.exists() and uploads_dir in doc_path.parents:
+                doc_path.unlink(missing_ok=True)
+                logger.info("Cleaned up temp document %s", session.document_path)
+        except Exception as exc:
+            logger.warning("Failed to clean up temp document %s: %s", session.document_path, exc)
+
     try:
         await session.browser.close()
     except Exception:
@@ -378,10 +390,14 @@ async def resume_application(
     session_id: str,
     captcha_text: str,
     approve: bool = True,
+    submit_final: bool = False,
+    keep_open_seconds: int = 0,
+    close_browser: bool = True,
 ) -> ApplyResumeResponse:
     """
-    Resume a paused session: fill the CAPTCHA, optionally submit,
-    capture the result, and close the browser.
+    Resume a paused session: fill the CAPTCHA, optionally submit or pause
+    for human safety review, capture the result, and optionally keep browser open
+    for user inspection.
     """
     try:
         session = get_session(session_id)
@@ -398,14 +414,13 @@ async def resume_application(
     try:
         if not approve:
             session.status = AgentStatus.failed
-            await close_session(session_id)
             return ApplyResumeResponse(
                 session_id=session_id,
                 status=session.status,
                 message="User chose not to approve. Session closed.",
             )
 
-        # Fill CAPTCHA input.
+        # Locate and fill captcha_text into the CAPTCHA input element with typing delay.
         captcha_input = await _resolve_element(
             page, config.captcha_input_selectors, timeout_ms=5000
         )
@@ -413,28 +428,46 @@ async def resume_application(
         await captcha_input.type(captcha_text, delay=50)
         session.steps_completed.append("CAPTCHA entered")
 
-        # Brief pause so the audience can see the CAPTCHA being entered.
-        await asyncio.sleep(2)
-
-        # Click submit if selectors are configured.
+        # Locate, scroll, and highlight Submit button
+        submit_btn = None
         if config.submit_button_selectors:
-            submit_btn = await _resolve_element(
-                page, config.submit_button_selectors, timeout_ms=5000
-            )
-            await submit_btn.click()
-            session.steps_completed.append("Submit clicked")
+            try:
+                submit_btn = await _resolve_element(
+                    page, config.submit_button_selectors, timeout_ms=5000
+                )
+                await submit_btn.scroll_into_view_if_needed()
+                await page.evaluate(
+                    "(btn) => { btn.style.border = '3px solid #10b981'; btn.style.boxShadow = '0 0 15px #10b981'; }",
+                    submit_btn,
+                )
+            except Exception as exc:
+                logger.warning("Could not locate or highlight submit button: %s", exc)
 
-            # Wait for navigation / response.
-            await asyncio.sleep(3)
+        if submit_final:
+            if submit_btn:
+                await submit_btn.click()
+                session.steps_completed.append("Submit clicked")
+                await asyncio.sleep(3)
+            final_screenshot = await _screenshot_page_b64(page)
+            session.status = AgentStatus.submitted
+            message = "Form submitted successfully. Check the screenshot for confirmation."
+        else:
+            # Safety Review Mode (Default): Do NOT click submit button
+            final_screenshot = await _screenshot_page_b64(page)
+            session.status = AgentStatus.submitted
+            message = "Form 100% pre-filled with CAPTCHA. Paused right before final submission for human review (Safety Mode)."
 
-        # Final screenshot.
-        final_screenshot = await _screenshot_page_b64(page)
-        session.status = AgentStatus.submitted
+        # Optional fixed delay for automated demo timers
+        headless = os.getenv("BROWSER_HEADLESS", "false").lower() in ("1", "true", "yes")
+        pause_duration = 0 if headless else keep_open_seconds
+        if pause_duration > 0:
+            logger.info("Keeping browser open for %d seconds for visual review...", pause_duration)
+            await asyncio.sleep(pause_duration)
 
         return ApplyResumeResponse(
             session_id=session_id,
             status=session.status,
-            message="Form submitted successfully. Check the screenshot for confirmation.",
+            message=message,
             final_screenshot_b64=final_screenshot,
         )
 
@@ -448,5 +481,6 @@ async def resume_application(
         )
 
     finally:
-        await close_session(session_id)
+        if close_browser or not approve:
+            await close_session(session_id)
 
