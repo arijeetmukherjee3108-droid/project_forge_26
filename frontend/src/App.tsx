@@ -6,6 +6,7 @@ import {
   ExtractionResponse,
   EligibilityResponse,
   GoogleVaultFile,
+  IntentClassificationResponse,
 } from './types';
 import {
   extractDocument,
@@ -14,6 +15,8 @@ import {
   resumeApplication,
   searchGoogleVault,
   fetchGoogleVaultFile,
+  classifyIntent,
+  KNOWN_SERVICES_CATALOG,
 } from './api';
 
 // ──────────────────────────────────────────────
@@ -243,14 +246,18 @@ const MOCK_AGENT_STEPS: { action: string; field: MockPortalField }[] = [
 
 const PROMPTS_BY_MODE = {
   apply: [
-    'Apply for Construction Worker Welfare Certificate on ServicePlus',
-    'Citizen Registration on National ServicePlus Portal',
-    'Direct Apply — Form 1784 (serviceonline.gov.in)',
+    'Apply for Vidya Lakshmi Higher Education Scholarship & Student Loan',
+    'Register for Construction Worker Welfare Scheme on ServicePlus (Form 1784)',
+    'Apply for PM-KISAN Farmer Income Support Scheme (₹6,000/yr)',
+    'Apply for Ayushman Bharat PM-JAY Cashless Health Card',
+    'Apply for Domicile / Income / Caste Certificate on ServicePlus',
   ],
   eligibility: [
-    'Check eligibility for Construction Worker Welfare (Form 1784)',
-    'Verify income limits & age criteria for ServicePlus Schemes',
-    'Check required documents for Citizen Registration',
+    'Check eligibility for Vidya Lakshmi Higher Education Loan subsidy',
+    'Verify income limits & age criteria for Construction Worker Welfare (1784)',
+    'Check land eligibility and required documents for PM-KISAN',
+    'Check family criteria and SECC eligibility for Ayushman Bharat PM-JAY',
+    'Check required documents for Citizen Registration on ServicePlus',
   ],
 };
 
@@ -260,30 +267,38 @@ const SUGGESTIONS_BY_MODE: Record<
 > = {
   apply: [
     {
+      iconType: 'sparkles',
+      text: 'Apply for Vidya Lakshmi Higher Education Scholarship & Student Loan',
+    },
+    {
       iconType: 'briefcase',
       text: 'Apply for Construction Worker Welfare Certificate on ServicePlus',
     },
     {
-      iconType: 'sparkles',
-      text: 'Citizen Registration on National ServicePlus Portal',
+      iconType: 'book',
+      text: 'Apply for PM-KISAN Farmer Income Support (₹6,000/year)',
     },
     {
-      iconType: 'book',
-      text: 'Direct Apply — Form 1784 (serviceonline.gov.in)',
+      iconType: 'sparkles',
+      text: 'Apply for Ayushman Bharat PM-JAY Cashless Healthcare Card',
     },
   ],
   eligibility: [
+    {
+      iconType: 'sparkles',
+      text: 'Check eligibility for Vidya Lakshmi Student Loan & Scholarship',
+    },
     {
       iconType: 'briefcase',
       text: 'Check eligibility for Construction Worker Welfare (Form 1784)',
     },
     {
-      iconType: 'sparkles',
-      text: 'Verify income limits & age criteria for ServicePlus Schemes',
+      iconType: 'book',
+      text: 'Verify landholding criteria and documents for PM-KISAN',
     },
     {
-      iconType: 'book',
-      text: 'Check required documents for Citizen Registration',
+      iconType: 'sparkles',
+      text: 'Check family coverage criteria for Ayushman Bharat PM-JAY',
     },
   ],
 };
@@ -336,6 +351,9 @@ const App: React.FC = () => {
   const [isListening, setIsListening] = useState(false);
   const [promptIndex, setPromptIndex] = useState(0);
   const [fadeState, setFadeState] = useState(true);
+  const [selectedService, setSelectedService] = useState<IntentClassificationResponse | null>(null);
+  const [isClassifying, setIsClassifying] = useState(false);
+  const [showSchemePicker, setShowSchemePicker] = useState(false);
 
   // Smoothly rotate the placeholder text every 4 seconds based on active mode
   useEffect(() => {
@@ -459,15 +477,49 @@ const App: React.FC = () => {
     }
   };
 
-  const handleIntentSubmit = (textToUse?: string) => {
+  const handleIntentSubmit = async (textToUse?: string) => {
     const query = textToUse || intent;
     if (!query.trim()) {
       showToast('Please type or speak what service you need.', 'error');
       return;
     }
-    setProfile((prev) => ({ ...prev, target_intent: query }));
-    showToast('Intent set! Proceeding to document upload.', 'success');
-    setCurrentStep(2);
+    setIsClassifying(true);
+    try {
+      const match = await classifyIntent(query);
+      setSelectedService(match);
+      setProfile((prev) => ({
+        ...prev,
+        target_intent: query,
+        target_service_id: match.service_id,
+        target_service_name: match.service_name,
+        target_portal_id: match.portal_id,
+        target_portal_name: match.portal_name,
+        target_portal_url: match.portal_url,
+        required_documents_list: match.required_documents,
+      }));
+      showToast(`🎯 Matched Scheme: ${match.service_name}`, 'success');
+    } catch {
+      showToast('Analyzing intent with fallback catalog.', 'info');
+    } finally {
+      setIsClassifying(false);
+    }
+  };
+
+  const handleSelectSchemeManual = (scheme: IntentClassificationResponse) => {
+    setSelectedService(scheme);
+    setIntent(scheme.service_name);
+    setShowSchemePicker(false);
+    setProfile((prev) => ({
+      ...prev,
+      target_intent: scheme.service_name,
+      target_service_id: scheme.service_id,
+      target_service_name: scheme.service_name,
+      target_portal_id: scheme.portal_id,
+      target_portal_name: scheme.portal_name,
+      target_portal_url: scheme.portal_url,
+      required_documents_list: scheme.required_documents,
+    }));
+    showToast(`Switched scheme to ${scheme.service_name}`, 'info');
   };
 
   // File Upload Handlers
@@ -807,9 +859,10 @@ const App: React.FC = () => {
       return;
     }
     try {
-      const resp = await checkEligibility(profile);
+      const targetServiceId = selectedService?.service_id || profile.target_service_id || '1784';
+      const resp = await checkEligibility(profile, targetServiceId);
       setEligibility(resp);
-      showToast('Eligibility verified!', 'success');
+      showToast(`Eligibility verified for ${resp.service_name || selectedService?.service_name || 'Service'}!`, 'success');
     } catch {
       showToast('Eligibility check failed.', 'error');
     } finally {
@@ -853,14 +906,17 @@ const App: React.FC = () => {
     setLoading(true);
     setAgentRunning(true);
     setAgentDone(false);
+    const portalName = selectedService?.portal_name || 'ServicePlus citizen registration portal';
+    const portalUrl = selectedService?.portal_url || 'serviceonline.gov.in';
+    const targetPortalId = selectedService?.portal_id || profile.target_portal_id || 'SERVICE_PLUS_REGISTRATION';
     setAgentLog([
       '🚀 Initializing Playwright browser in visible Chromium mode...',
-      '🌐 Navigating to ServicePlus citizen registration portal (serviceonline.gov.in)...',
+      `🌐 Navigating to ${portalName} (${portalUrl})...`,
       '✍️ Autonomous agent mapping verified citizen profile to official portal fields...'
     ]);
     try {
       const docFilename = profile.source_documents?.find(f => f.startsWith('saved:'))?.replace('saved:', '');
-      const resp = await startApplication(profile, docFilename);
+      const resp = await startApplication(profile, targetPortalId, docFilename);
       const steps = resp.steps_completed || resp.log_steps || [];
       if (steps.length > 0) {
         setAgentLog(steps);
@@ -1154,6 +1210,102 @@ const App: React.FC = () => {
                   </button>
                 ))}
               </div>
+
+              {/* Dynamic Intent Match Card (Bugs 1 & 2) */}
+              {isClassifying && (
+                <div style={{ marginTop: '1.25rem', color: '#94a3b8', fontSize: '0.88rem', display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                  <div className="hunting-spinner" style={{ width: '16px', height: '16px' }} />
+                  <span>AI matching citizen request against official scheme catalog...</span>
+                </div>
+              )}
+
+              {selectedService && !isClassifying && (
+                <div className="matched-scheme-card">
+                  <div className="scheme-card-header">
+                    <div className="scheme-title-row">
+                      <span style={{ fontSize: '1.3rem' }}>
+                        {selectedService.category === 'education' && '🎓'}
+                        {selectedService.category === 'welfare' && '🏗️'}
+                        {selectedService.category === 'agriculture' && '🌾'}
+                        {selectedService.category === 'health' && '🏥'}
+                        {selectedService.category === 'general' && '🏛️'}
+                      </span>
+                      <h3 className="scheme-title">{selectedService.service_name}</h3>
+                    </div>
+                    <span className={`scheme-category-badge ${selectedService.category}`}>
+                      {selectedService.category}
+                    </span>
+                  </div>
+
+                  <div className="scheme-portal-info">
+                    <span>🏛️ Target: <strong>{selectedService.portal_name}</strong></span>
+                    <span>•</span>
+                    <a
+                      href={selectedService.portal_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{ color: '#38bdf8', textDecoration: 'none' }}
+                    >
+                      {new URL(selectedService.portal_url).hostname} ↗
+                    </a>
+                  </div>
+
+                  <div className="scheme-desc">{selectedService.description}</div>
+
+                  <div className="scheme-docs-section">
+                    <span className="scheme-docs-label">Required Documents:</span>
+                    {selectedService.required_documents.map((doc, i) => (
+                      <span key={i} className="scheme-doc-pill">📎 {doc}</span>
+                    ))}
+                  </div>
+
+                  <div className="scheme-actions-row">
+                    <button
+                      type="button"
+                      className="gemini-btn gemini-btn-primary"
+                      onClick={() => setCurrentStep(2)}
+                    >
+                      Proceed to Document Upload →
+                    </button>
+                    <button
+                      type="button"
+                      className="gemini-btn gemini-btn-tonal"
+                      onClick={() => setShowSchemePicker(!showSchemePicker)}
+                    >
+                      Change Scheme ▾
+                    </button>
+                  </div>
+
+                  {showSchemePicker && (
+                    <div style={{ marginTop: '1rem', borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '0.75rem' }}>
+                      <div style={{ fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.5rem', fontWeight: 600 }}>
+                        SELECT FROM OFFICIAL SCHEMES CATALOG:
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                        {KNOWN_SERVICES_CATALOG.map((sch) => (
+                          <button
+                            key={sch.service_id}
+                            type="button"
+                            className={`picker-option-card ${selectedService.service_id === sch.service_id ? 'selected' : ''}`}
+                            onClick={() => handleSelectSchemeManual(sch)}
+                            style={{ padding: '0.6rem 0.85rem' }}
+                          >
+                            <div className="picker-card-left">
+                              <span className={`custom-radio-circle ${selectedService.service_id === sch.service_id ? 'checked' : ''}`}>
+                                {selectedService.service_id === sch.service_id && <span className="custom-radio-dot" />}
+                              </span>
+                              <span className="picker-opt-label" style={{ fontSize: '0.82rem' }}>{sch.service_name}</span>
+                            </div>
+                            <span className={`scheme-category-badge ${sch.category}`} style={{ fontSize: '0.62rem' }}>
+                              {sch.category}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
@@ -1162,10 +1314,15 @@ const App: React.FC = () => {
           ════════════════════════════════════════ */}
           {currentStep === 2 && (
             <div className="gemini-card">
-              <h2 className="card-title">Upload Official Citizen Document</h2>
+              <h2 className="card-title">
+                {selectedService
+                  ? `Upload Document for ${selectedService.service_name}`
+                  : 'Upload Official Citizen Document'}
+              </h2>
               <p className="card-desc">
-                Upload your Income Certificate, Marksheet, or ID card (PDF or Image).
-                PyMuPDF & AI will extract structured identity fields for ServicePlus.
+                {selectedService
+                  ? `Target: ${selectedService.portal_name}. Required for this scheme: ${selectedService.required_documents.join(', ')}.`
+                  : 'Upload your Income Certificate, Marksheet, or ID card (PDF or Image). PyMuPDF & AI will extract structured identity fields for ServicePlus.'}
               </p>
 
               <div

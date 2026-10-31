@@ -33,6 +33,30 @@ export interface ApplicantProfile {
 
   // Metadata
   source_documents?: string[];
+
+  // Dynamic Intent & Target Service (Bugs 1 & 2)
+  target_intent?: string;
+  target_service_id?: string;
+  target_service_name?: string;
+  target_portal_id?: string;
+  target_portal_name?: string;
+  target_portal_url?: string;
+  required_documents_list?: string[];
+}
+
+/**
+ * Dynamic Intent Classification Result (Matches Teammate's POST /api/intent/classify)
+ */
+export interface IntentClassificationResponse {
+  service_id: string;              // e.g. '1784', 'vidyalakshmi', 'pmkisan', 'ayushman_bharat', 'citizen_registration'
+  service_name: string;            // Human-readable scheme name
+  portal_id: string;               // Key in PORTAL_REGISTRY e.g. 'SERVICE_PLUS_REGISTRATION', 'VIDYA_LAKSHMI_PORTAL'
+  portal_name: string;             // Official portal name
+  portal_url: string;              // Official web address
+  category: 'welfare' | 'education' | 'agriculture' | 'health' | 'general';
+  required_documents: string[];    // Target documents to fetch or upload
+  confidence: number;              // 0.0 to 1.0
+  description: string;
 }
 
 /**
