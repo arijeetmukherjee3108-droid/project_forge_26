@@ -443,14 +443,30 @@ async def resume_application(
             except Exception as exc:
                 logger.warning("Could not locate or highlight submit button: %s", exc)
 
+        receipt_no = None
         if submit_final:
             if submit_btn:
                 await submit_btn.click()
                 session.steps_completed.append("Submit clicked")
-                await asyncio.sleep(3)
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=5000)
+                except Exception:
+                    await asyncio.sleep(2)
             final_screenshot = await _screenshot_page_b64(page)
             session.status = AgentStatus.submitted
-            message = "Form submitted successfully. Check the screenshot for confirmation."
+            message = "Form submitted successfully. Application receipt captured."
+            try:
+                page_text = await page.inner_text("body")
+                import re
+                match = re.search(
+                    r"(?:Ack(?:nowledgement)?|Ref(?:erence)?|Application|Registration)\s*(?:No\.?|Number|ID)?[:\-\s]+([A-Z0-9\-\/]{6,25})",
+                    page_text,
+                    re.IGNORECASE,
+                )
+                if match:
+                    receipt_no = match.group(0).strip()
+            except Exception:
+                pass
         else:
             # Safety Review Mode (Default): Do NOT click submit button
             final_screenshot = await _screenshot_page_b64(page)
@@ -468,6 +484,7 @@ async def resume_application(
             session_id=session_id,
             status=session.status,
             message=message,
+            tracking_receipt=receipt_no,
             final_screenshot_b64=final_screenshot,
         )
 

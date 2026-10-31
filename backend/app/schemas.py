@@ -374,6 +374,10 @@ class ApplyResumeRequest(BaseModel):
     approve: bool = Field(
         description="True = citizen confirms submission; False = abort.",
     )
+    submit_final: bool = Field(
+        default=False,
+        description="True = actually click the portal submit button; False = Safety Review pause.",
+    )
 
 
 class ApplyResumeResponse(BaseModel):
@@ -526,4 +530,37 @@ class PreparedFile(BaseModel):
             "Plain-English sentence suitable for showing to the citizen, "
             "e.g. 'Your file was reduced from 2.4 MB to 180 KB using PyMuPDF.'"
         ),
+    )
+
+
+# ---------- g) POST /api/intent/classify ------------------------------------
+
+
+class IntentClassifyRequest(BaseModel):
+    """Request body for POST /api/intent/classify."""
+
+    text: str = Field(
+        description="The citizen's typed prompt or transcribed voice query.",
+        examples=["I want to apply for student scholarship", "किसान सम्मान निधि योजना"],
+    )
+
+
+class IntentClassifyResponse(BaseModel):
+    """Response body for POST /api/intent/classify."""
+
+    matched_service_id: str = Field(
+        description="Matched service identifier (e.g. '1784', 'vidyalakshmi', 'pm_kisan', 'ration_card', 'citizen_registration').",
+    )
+    service_name: str = Field(
+        description="Human-readable title of the government scheme or portal service.",
+    )
+    confidence: float = Field(
+        description="Confidence score between 0.0 and 1.0.",
+    )
+    explanation: str = Field(
+        description="Brief explanation of why this service was matched.",
+    )
+    suggested_documents: list[str] = Field(
+        default_factory=list,
+        description="Key documents recommended to fetch or upload for this scheme.",
     )
