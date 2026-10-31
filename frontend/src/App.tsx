@@ -382,6 +382,10 @@ const App: React.FC = () => {
   const [activeFieldIndex, setActiveFieldIndex] = useState(-1);
   const [submitted, setSubmitted] = useState(false);
   const [showQuickEdit, setShowQuickEdit] = useState(false);
+  const [portalViewMode, setPortalViewMode] = useState<'interactive' | 'screenshot'>('interactive');
+  const [portalPassword, setPortalPassword] = useState('ADmin@357');
+  const [showPassword, setShowPassword] = useState(false);
+  const [termsAccepted, setTermsAccepted] = useState(true);
 
   // UI helpers
   const [loading, setLoading] = useState(false);
@@ -1637,6 +1641,27 @@ const App: React.FC = () => {
                     <span className="light min" />
                     <span className="light max" />
                   </div>
+
+                  {/* Mode switcher: Interactive vs Screenshot */}
+                  <div className="portal-view-toggle">
+                    <button
+                      type="button"
+                      className={`portal-toggle-btn ${portalViewMode === 'interactive' ? 'active' : ''}`}
+                      onClick={() => setPortalViewMode('interactive')}
+                      title="Directly interact with and fill the official ServicePlus form"
+                    >
+                      ⚡ Interactive Form
+                    </button>
+                    <button
+                      type="button"
+                      className={`portal-toggle-btn ${portalViewMode === 'screenshot' ? 'active' : ''}`}
+                      onClick={() => setPortalViewMode('screenshot')}
+                      title="View the raw Playwright browser viewport screenshot"
+                    >
+                      📸 Live Screenshot
+                    </button>
+                  </div>
+
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flex: 1, minWidth: 0 }}>
                     <div className="browser-url-pill">
                       <span>🔒</span>
@@ -1661,51 +1686,230 @@ const App: React.FC = () => {
                 </div>
 
                 <div className="portal-document-body">
-                  {pageScreenshot ? (
-                    <img
-                      src={`data:image/png;base64,${pageScreenshot}`}
-                      alt="Portal Live Screenshot"
-                      style={{ width: '100%', borderRadius: '4px' }}
-                    />
+                  {portalViewMode === 'screenshot' && pageScreenshot ? (
+                    <div style={{ textAlign: 'center', padding: '0.5rem' }}>
+                      <img
+                        src={`data:image/png;base64,${pageScreenshot}`}
+                        alt="Portal Live Screenshot"
+                        style={{ width: '100%', borderRadius: '4px', boxShadow: '0 4px 16px rgba(0,0,0,0.1)' }}
+                      />
+                    </div>
                   ) : (
-                    <div>
-                      <div className="gov-portal-masthead">
-                        <div style={{ fontSize: '1.75rem' }}>🏛️</div>
-                        <div>
-                          <strong style={{ fontSize: '1rem' }}>National ServicePlus Portal — Government of India</strong>
-                          <div style={{ fontSize: '0.75rem', opacity: 0.9 }}>
-                            Direct Application for Construction Worker Welfare Certificate
+                    <div className="serviceplus-live-container">
+                      {/* ServicePlus Top Header */}
+                      <div className="serviceplus-masthead">
+                        <div className="sp-branding-group">
+                          <div className="sp-emblem-badge" title="National Emblem of India">🏛️</div>
+                          <div className="sp-logo-combo">
+                            <div className="sp-logo-row">
+                              <span className="sp-logo-orange-s">S</span>
+                              <span className="sp-logo-title">Service<span style={{ color: '#ea580c' }}>Plus</span></span>
+                            </div>
+                            <span className="sp-logo-subtitle">
+                              Metadata based Integrated eService Delivery Framework
+                            </span>
                           </div>
+                        </div>
+
+                        <div className="sp-top-links">
+                          <span className="sp-link">Select Instance ▾</span>
+                          <span className="sp-link">Check Eligibility</span>
+                          <span className="sp-link">Contact Us</span>
                         </div>
                       </div>
 
-                      {portalFields.length === 0 && !agentRunning && (
-                        <div style={{ textAlign: 'center', padding: '3.5rem 1rem', color: '#6b7280' }}>
-                          <div style={{ fontSize: '2.5rem', marginBottom: '0.5rem' }}>🖥️</div>
-                          <p>The Playwright agent opens this portal live.</p>
-                          <p style={{ fontSize: '0.8rem', color: '#9ca3af' }}>
-                            Judges can watch every field fill up in real time.
-                          </p>
-                        </div>
-                      )}
+                      {/* Registration Form Card */}
+                      <div className="sp-reg-card">
+                        <div className="sp-reg-card-accent" />
+                        <h2 className="sp-reg-heading">REGISTRATION</h2>
 
-                      {portalFields.map((f, i) => (
-                        <div
-                          key={i}
-                          className={`portal-field-row ${i === activeFieldIndex ? 'active-portal-field' : ''}`}
-                        >
-                          <label className="p-field-label">{f.label}</label>
-                          {f.type === 'checkbox' ? (
-                            <div className="p-field-check">
-                              <span>☑️</span> {f.value}
-                            </div>
-                          ) : f.type === 'file' ? (
-                            <span className="p-field-badge">📎 {f.value}</span>
-                          ) : (
-                            <div className="p-field-input">{f.value}</div>
-                          )}
+                        {/* Full Name */}
+                        <div className="sp-form-row">
+                          <label className="sp-label">
+                            Full Name <span className="sp-req">*</span>
+                          </label>
+                          <input
+                            type="text"
+                            className="sp-input"
+                            value={profile.full_name || ''}
+                            onChange={(e) => setProfile((prev) => ({ ...prev, full_name: e.target.value }))}
+                            placeholder="Enter applicant full name"
+                          />
                         </div>
-                      ))}
+
+                        {/* Email Id */}
+                        <div className="sp-form-row">
+                          <label className="sp-label">
+                            Email Id <span className="sp-req">*</span>
+                          </label>
+                          <input
+                            type="email"
+                            className="sp-input"
+                            value={profile.email || ''}
+                            onChange={(e) => setProfile((prev) => ({ ...prev, email: e.target.value }))}
+                            placeholder="name@example.com"
+                          />
+                        </div>
+
+                        {/* Mobile No. */}
+                        <div className="sp-form-row">
+                          <label className="sp-label">
+                            Mobile No. <span className="sp-req">*</span>
+                          </label>
+                          <input
+                            type="tel"
+                            maxLength={10}
+                            className="sp-input"
+                            value={profile.mobile_number || ''}
+                            onChange={(e) =>
+                              setProfile((prev) => ({
+                                ...prev,
+                                mobile_number: e.target.value.replace(/\D/g, '').slice(0, 10),
+                              }))
+                            }
+                            placeholder="10-digit mobile number"
+                          />
+                        </div>
+
+                        {/* Password */}
+                        <div className="sp-form-row">
+                          <label className="sp-label">
+                            Password <span className="sp-req">*</span>
+                          </label>
+                          <div className="sp-password-wrap">
+                            <input
+                              type={showPassword ? 'text' : 'password'}
+                              className="sp-input sp-password-input"
+                              value={portalPassword}
+                              onChange={(e) => setPortalPassword(e.target.value)}
+                              placeholder="Enter account password"
+                            />
+                            <button
+                              type="button"
+                              className="sp-password-toggle-btn"
+                              onClick={() => setShowPassword(!showPassword)}
+                              title={showPassword ? 'Hide password' : 'Show password'}
+                            >
+                              {showPassword ? '👁️' : '🔒'}
+                            </button>
+                          </div>
+                          <div className="sp-password-note">
+                            Note: Password should be at least '8' characters with at least one special character(!@#$%^&*), one numeric, one small case and one upper case letter (i.e ADmin@357)
+                          </div>
+                        </div>
+
+                        {/* State */}
+                        <div className="sp-form-row">
+                          <label className="sp-label">
+                            Select State <span className="sp-req">*</span>
+                          </label>
+                          <select
+                            className="sp-input"
+                            value={profile.state ? profile.state.toUpperCase() : 'UTTAR PRADESH'}
+                            onChange={(e) => setProfile((prev) => ({ ...prev, state: e.target.value }))}
+                          >
+                            <option value="">-- Select State --</option>
+                            <option value="ANDHRA PRADESH">ANDHRA PRADESH</option>
+                            <option value="BIHAR">BIHAR</option>
+                            <option value="CHHATTISGARH">CHHATTISGARH</option>
+                            <option value="DELHI">DELHI</option>
+                            <option value="GUJARAT">GUJARAT</option>
+                            <option value="HARYANA">HARYANA</option>
+                            <option value="HIMACHAL PRADESH">HIMACHAL PRADESH</option>
+                            <option value="JHARKHAND">JHARKHAND</option>
+                            <option value="KARNATAKA">KARNATAKA</option>
+                            <option value="KERALA">KERALA</option>
+                            <option value="MADHYA PRADESH">MADHYA PRADESH</option>
+                            <option value="MAHARASHTRA">MAHARASHTRA</option>
+                            <option value="ODISHA">ODISHA</option>
+                            <option value="PUNJAB">PUNJAB</option>
+                            <option value="RAJASTHAN">RAJASTHAN</option>
+                            <option value="TAMIL NADU">TAMIL NADU</option>
+                            <option value="TELANGANA">TELANGANA</option>
+                            <option value="UTTAR PRADESH">UTTAR PRADESH</option>
+                            <option value="UTTARAKHAND">UTTARAKHAND</option>
+                            <option value="WEST BENGAL">WEST BENGAL</option>
+                          </select>
+                        </div>
+
+                        {/* Captcha Section */}
+                        <div className="sp-captcha-container">
+                          <label className="sp-label" style={{ marginBottom: '0.4rem', display: 'block' }}>
+                            Security Verification <span className="sp-req">*</span>
+                          </label>
+                          <div className="sp-captcha-flex-row">
+                            <div className="sp-captcha-visual">
+                              {captchaScreenshot ? (
+                                <img
+                                  src={`data:image/png;base64,${captchaScreenshot}`}
+                                  alt="Live Portal CAPTCHA"
+                                />
+                              ) : (
+                                <span className="sp-mock-captcha-text">2MJ5D5</span>
+                              )}
+                            </div>
+                            <button
+                              type="button"
+                              className="sp-captcha-btn"
+                              title="Refresh CAPTCHA"
+                              onClick={async () => {
+                                showToast('Refetching fresh CAPTCHA from official portal...', 'info');
+                                await handleStartAgent();
+                              }}
+                            >
+                              🔄
+                            </button>
+                            <button
+                              type="button"
+                              className="sp-captcha-btn"
+                              title="Listen to CAPTCHA"
+                              onClick={() => showToast('CAPTCHA audio playback available', 'info')}
+                            >
+                              🔊
+                            </button>
+                            <input
+                              type="text"
+                              className="sp-input sp-captcha-text-input"
+                              placeholder="Enter Captcha"
+                              value={captchaText}
+                              onChange={(e) => setCaptchaText(e.target.value)}
+                            />
+                          </div>
+                        </div>
+
+                        {/* Terms and Conditions */}
+                        <div className="sp-terms-group">
+                          <input
+                            type="checkbox"
+                            id="sp-terms-input"
+                            checked={termsAccepted}
+                            onChange={(e) => setTermsAccepted(e.target.checked)}
+                          />
+                          <label htmlFor="sp-terms-input">
+                            I declare that the information provided is correct and I accept the terms & conditions of the ServicePlus Portal.
+                          </label>
+                        </div>
+
+                        {/* Action Buttons directly inside the Form */}
+                        <div className="sp-form-actions">
+                          <button
+                            type="button"
+                            className="sp-action-btn-secondary"
+                            disabled={loading}
+                            onClick={() => handleResume('FILL_ONLY')}
+                          >
+                            Validate & Fill Only
+                          </button>
+                          <button
+                            type="button"
+                            className="sp-action-btn-primary"
+                            disabled={!captchaText || loading || !termsAccepted}
+                            onClick={() => handleResume('SUBMIT')}
+                          >
+                            {loading ? 'Submitting…' : 'Submit Registration'}
+                          </button>
+                        </div>
+                      </div>
                     </div>
                   )}
                 </div>
