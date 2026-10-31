@@ -646,9 +646,12 @@ const App: React.FC = () => {
         target_portal_url: match.portal_url,
         required_documents_list: match.required_documents,
       }));
-      showToast(`🎯 Matched Scheme: ${match.service_name}`, 'success');
+      showToast(`AI routed to: ${match.service_name}`, 'success');
+      // Directly navigate citizen driven by AI intent processing
+      setCurrentStep(2);
     } catch {
       showToast('Analyzing intent with fallback catalog.', 'info');
+      setCurrentStep(2);
     } finally {
       setIsClassifying(false);
     }
@@ -669,6 +672,7 @@ const App: React.FC = () => {
       required_documents_list: scheme.required_documents,
     }));
     showToast(`Switched scheme to ${scheme.service_name}`, 'info');
+    setCurrentStep(2);
   };
 
   // File Upload Handlers
@@ -1454,17 +1458,11 @@ const App: React.FC = () => {
                   <div className="scheme-actions-row">
                     <button
                       type="button"
-                      className="gemini-btn gemini-btn-primary"
-                      onClick={() => setCurrentStep(2)}
-                    >
-                      Proceed to Document Upload →
-                    </button>
-                    <button
-                      type="button"
                       className="gemini-btn gemini-btn-tonal"
+                      style={{ fontSize: '0.78rem', padding: '0.35rem 0.75rem' }}
                       onClick={() => setShowSchemePicker(!showSchemePicker)}
                     >
-                      Change Scheme ▾
+                      {showSchemePicker ? '▲ Hide Scheme Picker' : '▾ Choose Different Scheme'}
                     </button>
                   </div>
 
@@ -2742,8 +2740,9 @@ const App: React.FC = () => {
                   )}
                 </div>
               </div>
-            );
-          })()}
+            </div>
+          );
+        })()}
         </div>
       </main>
 
