@@ -26,6 +26,7 @@ try:
         CitizenProfile,
         EligibilityResponse,
         RuleResult,
+        IntentClassifyResponse,
     )
 except ImportError:
     from backend.app.schemas import (
@@ -33,6 +34,7 @@ except ImportError:
         CitizenProfile,
         EligibilityResponse,
         RuleResult,
+        IntentClassifyResponse,
     )
 
 # ---------------------------------------------------------------------------
@@ -217,6 +219,32 @@ def _rule_allowed_categories(profile: CitizenProfile, cfg: dict) -> RuleResult:
     )
 
 
+def _rule_occupation(profile: CitizenProfile, cfg: dict) -> RuleResult:
+    """Citizen's occupation must match one of cfg['allowed_occupations'] (case-insensitive)."""
+    allowed: list[str] = [o.lower() for o in cfg["allowed_occupations"]]
+    if not profile.occupation:
+        return RuleResult(
+            rule_id="occupation",
+            description=f"Must work in an eligible occupation: {', '.join(cfg['allowed_occupations'])}",
+            passed=False,
+            explanation="Missing: occupation, please specify your occupation.",
+        )
+    occ = profile.occupation.lower()
+    if any(a in occ or occ in a for a in allowed):
+        return RuleResult(
+            rule_id="occupation",
+            description=f"Must work in an eligible occupation: {', '.join(cfg['allowed_occupations'])}",
+            passed=True,
+            explanation=f"Your occupation ({profile.occupation}) is eligible for this scheme.",
+        )
+    return RuleResult(
+        rule_id="occupation",
+        description=f"Must work in an eligible occupation: {', '.join(cfg['allowed_occupations'])}",
+        passed=False,
+        explanation=f"Your occupation ({profile.occupation}) is not eligible. Required: {', '.join(cfg['allowed_occupations'])}.",
+    )
+
+
 def _rule_required_documents(profile: CitizenProfile, cfg: dict) -> RuleResult:
     """At least one document from cfg['doc_tags'] must appear in source_documents."""
     required_any: list[str] = cfg["doc_tags"]
@@ -334,6 +362,126 @@ SERVICE_RULES: dict[str, dict] = {
             ),
         ],
     },
+    "vidyalakshmi": {
+        # Vidya Lakshmi Higher Education Scholarship & Education Loan
+        "name": "Vidya Lakshmi Higher Education Scholarship & Education Loan Portal",
+        "rules": [
+            (
+                _rule_min_age,
+                {
+                    "min_age": 16,
+                },
+            ),
+            (
+                _rule_max_age,
+                {
+                    "max_age": 35,
+                },
+            ),
+            (
+                _rule_income_ceiling,
+                {
+                    "ceiling_inr": 450_000,
+                },
+            ),
+            (
+                _rule_required_fields,
+                {
+                    "fields": [
+                        "full_name",
+                        "date_of_birth",
+                        "mobile_number",
+                        "email",
+                        "state",
+                        "pincode",
+                        "annual_income",
+                    ],
+                },
+            ),
+            (
+                _rule_required_documents,
+                {
+                    "doc_tags": ["marksheet", "income_certificate", "aadhaar"],
+                },
+            ),
+        ],
+    },
+    "pm_kisan": {
+        # Pradhan Mantri Kisan Samman Nidhi (PM-KISAN)
+        "name": "Pradhan Mantri Kisan Samman Nidhi (PM-KISAN ₹6,000/yr Direct Support)",
+        "rules": [
+            (
+                _rule_min_age,
+                {
+                    "min_age": 18,
+                },
+            ),
+            (
+                _rule_income_ceiling,
+                {
+                    "ceiling_inr": 250_000,
+                },
+            ),
+            (
+                _rule_required_fields,
+                {
+                    "fields": [
+                        "full_name",
+                        "father_or_guardian_name",
+                        "mobile_number",
+                        "state",
+                        "district",
+                        "pincode",
+                    ],
+                },
+            ),
+            (
+                _rule_required_documents,
+                {
+                    "doc_tags": ["land_record", "bank_passbook", "aadhaar", "income_certificate"],
+                },
+            ),
+        ],
+    },
+    "ration_card": {
+        # NFSA Priority Household / BPL Ration Card
+        "name": "National Food Security (NFSA) Priority Household / BPL Ration Card",
+        "rules": [
+            (
+                _rule_min_age,
+                {
+                    "min_age": 18,
+                },
+            ),
+            (
+                _rule_income_ceiling,
+                {
+                    "ceiling_inr": 150_000,
+                },
+            ),
+            (
+                _rule_required_fields,
+                {
+                    "fields": [
+                        "full_name",
+                        "father_or_guardian_name",
+                        "mobile_number",
+                        "state",
+                        "district",
+                        "address_line",
+                        "pincode",
+                        "annual_income",
+                    ],
+                },
+            ),
+            (
+                _rule_required_documents,
+                {
+                    "doc_tags": ["income_certificate", "aadhaar", "domicile"],
+                },
+            ),
+        ],
+    },
 }
 
 # ---------------------------------------------------------------------------
@@ -341,6 +489,24 @@ SERVICE_RULES: dict[str, dict] = {
 # ---------------------------------------------------------------------------
 
 UNKNOWN_SERVICE_NAME = "Unknown Service"
+
+_SERVICE_ALIASES: dict[str, str] = {
+    "pmkisan": "pm_kisan",
+    "pm-kisan": "pm_kisan",
+    "pm_kisan_samman_nidhi": "pm_kisan",
+    "vidya_lakshmi": "vidyalakshmi",
+    "vidya-lakshmi": "vidyalakshmi",
+    "vidyalaxmi": "vidyalakshmi",
+    "scholarship": "vidyalakshmi",
+    "ration": "ration_card",
+    "ration-card": "ration_card",
+    "rashan": "ration_card",
+    "bpl": "ration_card",
+    "nfsa": "ration_card",
+    "service_plus_registration": "citizen_registration",
+    "serviceplus_registration": "citizen_registration",
+    "serviceplus": "citizen_registration",
+}
 
 
 def check_eligibility(
@@ -353,13 +519,14 @@ def check_eligibility(
     - Never crashes on None/missing fields; each rule handles None gracefully.
     - No network calls, no file I/O, no personal-data logging.
     """
-    if service_id not in SERVICE_RULES:
+    normalized_id = _SERVICE_ALIASES.get(service_id.lower().strip(), service_id.strip())
+    if normalized_id not in SERVICE_RULES:
         raise ValueError(
             f"Unknown service_id: '{service_id}'. "
             f"Supported: {list(SERVICE_RULES.keys())}"
         )
 
-    service_cfg = SERVICE_RULES[service_id]
+    service_cfg = SERVICE_RULES[normalized_id]
     service_name: str = service_cfg["name"]
     rule_pairs: list[tuple[RuleFunc, dict]] = service_cfg["rules"]
 
@@ -389,4 +556,112 @@ def check_eligibility(
         service_name=service_name,
         results=results,
         summary=summary,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Intent Classification Helper
+# ---------------------------------------------------------------------------
+
+_INTENT_KEYWORD_MAP: dict[str, dict] = {
+    "vidyalakshmi": {
+        "keywords": [
+            "scholarship", "vidya", "lakshmi", "laxmi", "student", "education",
+            "study", "college", "school", "loan", "university", "fee", "tuition",
+            "padhai", "chhatravritti", "vidyarthi", "shiksha", "degree", "higher education",
+        ],
+        "default_docs": ["marksheet", "income_certificate", "aadhaar"],
+        "description": "Matched higher education, scholarship, or student loan intent.",
+    },
+    "pm_kisan": {
+        "keywords": [
+            "kisan", "farmer", "agriculture", "cultivator", "farming", "samman nidhi",
+            "6000", "6,000", "kheti", "fasal", "krishi", "landholder", "patwari",
+            "khasra", "khatauni", "crop", "seed", "fertilizer", "dbt",
+        ],
+        "default_docs": ["land_record", "bank_passbook", "aadhaar"],
+        "description": "Matched small/marginal farmer income support scheme (PM-KISAN).",
+    },
+    "ration_card": {
+        "keywords": [
+            "ration", "rashan", "food", "grain", "bpl", "nfsa", "antyodaya",
+            "ration card", "khadya", "gehun", "chawal", "fair price shop", "pds",
+            "food security", "khadyann", "subsidy food",
+        ],
+        "default_docs": ["income_certificate", "aadhaar", "domicile"],
+        "description": "Matched food security, subsidized grains, or ration card intent.",
+    },
+    "1784": {
+        "keywords": [
+            "construction", "labour", "labor", "worker", "shramik", "majdur",
+            "mazdoor", "building worker", "welfare board", "certificate", "bhavan",
+            "construction worker", "unorganized", "karigar",
+        ],
+        "default_docs": ["income_certificate", "aadhaar"],
+        "description": "Matched construction / unorganized labour welfare certificate (Service 1784).",
+    },
+    "citizen_registration": {
+        "keywords": [
+            "register", "registration", "signup", "sign up", "account", "login",
+            "serviceplus", "service online", "create account", "new user",
+        ],
+        "default_docs": ["aadhaar"],
+        "description": "Matched general ServicePlus citizen self-registration intent.",
+    },
+}
+
+
+def classify_citizen_intent(text: str) -> IntentClassifyResponse:
+    """
+    Classify the citizen's prompt/voice transcript to the closest government scheme.
+    Uses bilingual (English + Hindi) semantic keyword matching with zero network latency.
+    """
+    raw = (text or "").strip().lower()
+    if not raw:
+        svc_cfg = SERVICE_RULES["1784"]
+        return IntentClassifyResponse(
+            matched_service_id="1784",
+            service_name=svc_cfg["name"],
+            confidence=0.5,
+            explanation="No query text provided; defaulted to ServicePlus 1784.",
+            suggested_documents=["income_certificate", "aadhaar"],
+        )
+
+    best_service_id = "1784"
+    best_score = 0
+    matched_reason = "General citizen application"
+
+    for svc_id, data in _INTENT_KEYWORD_MAP.items():
+        score = 0
+        for kw in data["keywords"]:
+            if " " in kw and kw in raw:
+                score += 3  # Multi-word phrase exact match gets higher weight
+            elif kw in raw.split() or kw in raw:
+                score += 1
+        if score > best_score:
+            best_score = score
+            best_service_id = svc_id
+            matched_reason = data["description"]
+
+    svc_cfg = SERVICE_RULES.get(best_service_id, SERVICE_RULES["1784"])
+    service_name = svc_cfg["name"]
+
+    if best_score >= 3:
+        confidence = 0.95
+    elif best_score == 2:
+        confidence = 0.88
+    elif best_score == 1:
+        confidence = 0.78
+    else:
+        confidence = 0.60
+        matched_reason = "Query did not strongly match a specific scheme; defaulted to ServicePlus 1784."
+
+    suggested_docs = _INTENT_KEYWORD_MAP.get(best_service_id, {}).get("default_docs", ["aadhaar"])
+
+    return IntentClassifyResponse(
+        matched_service_id=best_service_id,
+        service_name=service_name,
+        confidence=confidence,
+        explanation=matched_reason,
+        suggested_documents=suggested_docs,
     )

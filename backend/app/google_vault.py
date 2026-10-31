@@ -101,88 +101,219 @@ _DEMO_CANDIDATES: dict[str, list[dict]] = {
             "modified_date": "2024-05-22",
         },
     ],
+    "kisan": [
+        {
+            "id": "demo_drive_pmkisan_passbook",
+            "name": "PM_KISAN_Land_Record_Patwari.pdf",
+            "source": "Google Drive",
+            "mime_type": "application/pdf",
+            "size_kb": 215.4,
+            "modified_date": "2024-09-18",
+        },
+        {
+            "id": "demo_gmail_kisan_credit",
+            "name": "Kisan_Credit_Card_Passbook.pdf",
+            "source": "Gmail",
+            "mime_type": "application/pdf",
+            "size_kb": 184.0,
+            "modified_date": "2024-06-10",
+        },
+    ],
+    "farmer": [
+        {
+            "id": "demo_drive_farmer_land",
+            "name": "Khasra_Khatauni_Land_Document.pdf",
+            "source": "Google Drive",
+            "mime_type": "application/pdf",
+            "size_kb": 240.0,
+            "modified_date": "2024-08-05",
+        },
+    ],
+    "ration": [
+        {
+            "id": "demo_drive_ration_card",
+            "name": "NFSA_Priority_Ration_Card.pdf",
+            "source": "Google Drive",
+            "mime_type": "application/pdf",
+            "size_kb": 160.0,
+            "modified_date": "2023-11-14",
+        },
+    ],
 }
 
 
-def _generate_demo_pdf(query: str) -> bytes:
+def _generate_demo_pdf(query: str, file_id: str = "") -> bytes:
     """
     Generate a realistic synthetic PDF certificate for demo mode.
     Contains extractable text fields so extractor.extract_profile() can parse them.
+    Multi-document support for Marksheets, Kisan records, Ration Cards, Aadhaar, and Income Certs.
     """
     import pymupdf
 
     doc = pymupdf.open()
     page = doc.new_page(width=595, height=842)  # A4
 
-    # Header
-    page.insert_text(
-        (50, 60),
-        "GOVERNMENT OF RAJASTHAN",
-        fontsize=16,
-    )
-    page.insert_text(
-        (50, 85),
-        "Office of the Tehsildar, Jaipur District",
-        fontsize=12,
-    )
+    hint = f"{query} {file_id}".lower()
 
-    # Title based on query
-    query_lower = query.lower()
-    if "income" in query_lower:
-        title = "INCOME CERTIFICATE"
-    elif "marksheet" in query_lower or "mark" in query_lower:
-        title = "HIGH SCHOOL MARKSHEET"
-    elif "caste" in query_lower:
-        title = "CASTE CERTIFICATE"
-    elif "domicile" in query_lower or "residence" in query_lower:
-        title = "RESIDENCE CERTIFICATE"
+    if any(k in hint for k in ["marksheet", "10th", "12th", "cbse", "mark"]):
+        # CBSE Marksheet Template
+        page.insert_text((50, 60), "CENTRAL BOARD OF SECONDARY EDUCATION", fontsize=16)
+        page.insert_text((50, 85), "Senior School Certificate Examination (Class XII)", fontsize=12)
+        page.insert_text((50, 130), "MARKS STATEMENT & PERFORMANCE CERTIFICATE", fontsize=16)
+        page.insert_text((50, 155), "Roll No: 6184920 | Year: 2023 | School: 08412-GOVT SR SEC SCHOOL JAIPUR", fontsize=10)
+
+        y = 200
+        fields = [
+            "Candidate Name: Ramesh Kumar Sharma",
+            "Father's Name: Suresh Kumar Sharma",
+            "Date of Birth: 15/05/1999",
+            "Gender: Male",
+            "Mobile: 9876543210",
+            "Email: ramesh.sharma2026@example.com",
+            "State: Rajasthan",
+            "District: Jaipur",
+            "Pin Code: 302029",
+            "Occupation: Student",
+            "Annual Income: Rs. 140000",
+            "Category: OBC",
+            "----------------------------------------------------------------------",
+            "SUB CODE & NAME             THEORY   PRACTICAL   TOTAL   GRADE",
+            "301  ENGLISH CORE             070       018       088      A2",
+            "041  MATHEMATICS              074       018       092      A1",
+            "042  PHYSICS                  058       028       086      A2",
+            "043  CHEMISTRY                062       028       090      A1",
+            "----------------------------------------------------------------------",
+            "RESULT: PASS (Overall Percentage: 89.0%)",
+        ]
+        for field_line in fields:
+            page.insert_text((50, y), field_line, fontsize=10)
+            y += 20
+        page.insert_text((50, y + 25), "Controller of Examinations, CBSE New Delhi", fontsize=10)
+        page.insert_text((50, y + 45), "Date of Result Declaration: 12/05/2023", fontsize=10)
+
+    elif any(k in hint for k in ["kisan", "farmer", "land", "passbook"]):
+        # PM-KISAN & Land Record Passbook Template
+        page.insert_text((50, 60), "PRADHAN MANTRI KISAN SAMMAN NIDHI (PM-KISAN)", fontsize=16)
+        page.insert_text((50, 85), "Department of Agriculture & Farmers Welfare, Rajasthan", fontsize=12)
+        page.insert_text((50, 130), "FARMER BENEFICIARY PASSBOOK & LAND RECORD", fontsize=16)
+        page.insert_text((50, 155), "Registration No: RJ-KISAN-2024-91823 | Domicile: Rajasthan", fontsize=10)
+
+        y = 200
+        fields = [
+            "Farmer Name: Ramesh Kumar Sharma",
+            "Father's Name: Suresh Kumar Sharma",
+            "Date of Birth: 15/05/1999",
+            "Gender: Male",
+            "Mobile: 9876543210",
+            "Aadhaar No: 4567 8901 2345",
+            "Village: Sanganer",
+            "District: Jaipur",
+            "State: Rajasthan",
+            "Pin Code: 302029",
+            "Occupation: Farmer",
+            "Annual Income: Rs. 95000",
+            "Category: OBC",
+            "Landholding Area: 1.4 Hectares (Small & Marginal Farmer Category)",
+            "Khasra / Khatauni Number: 412/1, Patwar Circle Sanganer",
+            "DBT Direct Benefit Transfer Bank Status: ACTIVE (Aadhaar Seeded)",
+        ]
+        for field_line in fields:
+            page.insert_text((50, y), field_line, fontsize=11)
+            y += 22
+        page.insert_text((50, y + 25), "Certified by: Patwari / Tehsildar, Sanganer Tehsil, Jaipur", fontsize=10)
+        page.insert_text((50, y + 45), "Date of Verification: 14/06/2024", fontsize=10)
+
+    elif any(k in hint for k in ["aadhaar", "uid"]):
+        # Aadhaar Card Template
+        page.insert_text((50, 60), "UNIQUE IDENTIFICATION AUTHORITY OF INDIA", fontsize=16)
+        page.insert_text((50, 85), "Government of India | Mera Aadhaar, Meri Pehchaan", fontsize=12)
+        page.insert_text((50, 130), "AADHAAR CARD (OFFICIAL IDENTITY DOCUMENT)", fontsize=16)
+        page.insert_text((50, 155), "Enrolment No: 1048/29184/01924", fontsize=10)
+
+        y = 200
+        fields = [
+            "Name: Ramesh Kumar Sharma",
+            "Father's Name: Suresh Kumar Sharma",
+            "Date of Birth: 15/05/1999",
+            "Gender: Male",
+            "Aadhaar Number: 4567 8901 2345",
+            "Mobile: 9876543210",
+            "Email: ramesh.sharma2026@example.com",
+            "Address: 42, Shanti Nagar, Near Gandhi Circle",
+            "Village: Sanganer",
+            "District: Jaipur",
+            "State: Rajasthan",
+            "Pin Code: 302029",
+            "Occupation: Student",
+            "Annual Income: Rs. 140000",
+            "Category: OBC",
+        ]
+        for field_line in fields:
+            page.insert_text((50, y), field_line, fontsize=11)
+            y += 22
+        page.insert_text((50, y + 25), "Unique Identification Authority of India (UIDAI)", fontsize=10)
+        page.insert_text((50, y + 45), "Generation Date: 20/01/2024", fontsize=10)
+
+    elif any(k in hint for k in ["ration", "bpl", "nfsa"]):
+        # NFSA Ration Card Template
+        page.insert_text((50, 60), "FOOD & CIVIL SUPPLIES DEPARTMENT, RAJASTHAN", fontsize=16)
+        page.insert_text((50, 85), "National Food Security Act (NFSA) 2013", fontsize=12)
+        page.insert_text((50, 130), "PRIORITY HOUSEHOLD RATION CARD (BPL/PHH)", fontsize=16)
+        page.insert_text((50, 155), "Ration Card No: 0802-9182-3841", fontsize=10)
+
+        y = 200
+        fields = [
+            "Head of Family: Ramesh Kumar Sharma",
+            "Father's Name: Suresh Kumar Sharma",
+            "Date of Birth: 15/05/1999",
+            "Gender: Male",
+            "Mobile: 9876543210",
+            "Aadhaar Number: 4567 8901 2345",
+            "Address: 42, Shanti Nagar, Sanganer",
+            "District: Jaipur",
+            "State: Rajasthan",
+            "Pin Code: 302029",
+            "Annual Income: Rs. 80000",
+            "Category: OBC",
+            "Fair Price Shop (FPS) Code: 4192 - Jaipur Central",
+            "Monthly Entitlement: Wheat 25 kg @ Rs 2/kg",
+        ]
+        for field_line in fields:
+            page.insert_text((50, y), field_line, fontsize=11)
+            y += 22
+        page.insert_text((50, y + 25), "Issued by: District Supply Officer, Food Department, Jaipur", fontsize=10)
+        page.insert_text((50, y + 45), "Date of Issue: 18/11/2023", fontsize=10)
+
     else:
-        title = "OFFICIAL CERTIFICATE"
+        # Standard Income Certificate (Default)
+        page.insert_text((50, 60), "GOVERNMENT OF RAJASTHAN", fontsize=16)
+        page.insert_text((50, 85), "Office of the Tehsildar, Jaipur District", fontsize=12)
+        page.insert_text((50, 130), "INCOME & DOMICILE CERTIFICATE", fontsize=16)
+        page.insert_text((50, 155), "Certificate No: RJ/JPR/2025/00847", fontsize=10)
 
-    page.insert_text((50, 130), title, fontsize=18)
-    page.insert_text(
-        (50, 155), "Certificate No: RJ/JPR/2025/00847", fontsize=10
-    )
-
-    # Fields that extractor.py can parse
-    y = 200
-    fields = [
-        "Name: Ramesh Kumar Sharma",
-        "Father's Name: Suresh Kumar Sharma",
-        "Date of Birth: 15/05/1999",
-        "Gender: Male",
-        "Mobile: 9876543210",
-        "Email: ramesh.sharma2026@example.com",
-        "Aadhaar No: 4567 8901 2345",
-        "Address: 42, Shanti Nagar, Near Gandhi Circle",
-        "Village: Sanganer",
-        "District: Jaipur",
-        "State: Rajasthan",
-        "Pin Code: 302029",
-        "Occupation: Student",
-        "Annual Income: Rs. 140000",
-        "Category: OBC",
-    ]
-    for field_line in fields:
-        page.insert_text((50, y), field_line, fontsize=11)
-        y += 22
-
-    # Footer
-    page.insert_text(
-        (50, y + 30),
-        "This is to certify that the above information is true and correct.",
-        fontsize=10,
-    )
-    page.insert_text(
-        (50, y + 55),
-        "Issued by: Tehsildar, Jaipur",
-        fontsize=10,
-    )
-    page.insert_text(
-        (50, y + 75),
-        "Date of Issue: 10/08/2025",
-        fontsize=10,
-    )
+        y = 200
+        fields = [
+            "Name: Ramesh Kumar Sharma",
+            "Father's Name: Suresh Kumar Sharma",
+            "Date of Birth: 15/05/1999",
+            "Gender: Male",
+            "Mobile: 9876543210",
+            "Email: ramesh.sharma2026@example.com",
+            "Aadhaar No: 4567 8901 2345",
+            "Address: 42, Shanti Nagar, Near Gandhi Circle",
+            "Village: Sanganer",
+            "District: Jaipur",
+            "State: Rajasthan",
+            "Pin Code: 302029",
+            "Occupation: Student",
+            "Annual Income: Rs. 140000",
+            "Category: OBC",
+        ]
+        for field_line in fields:
+            page.insert_text((50, y), field_line, fontsize=11)
+            y += 22
+        page.insert_text((50, y + 25), "Issued by: Tehsildar, Jaipur", fontsize=10)
+        page.insert_text((50, y + 45), "Date of Issue: 10/08/2025", fontsize=10)
 
     buf = io.BytesIO()
     doc.save(buf)
@@ -217,9 +348,14 @@ def _search_drive(access_token: str, query: str) -> list[VaultCandidate]:
     """Search Google Drive for PDF/image files matching the query."""
     candidates: list[VaultCandidate] = []
 
-    # Build Drive API query
+    clean_terms = [t.strip().replace("'", "\\'") for t in query.replace("_", " ").split() if t.strip()]
+    if not clean_terms:
+        return []
+
+    # Match each term in filename, or search fullText
+    term_clauses = " and ".join(f"name contains '{t}'" for t in clean_terms)
     drive_query = (
-        f"name contains '{query}' "
+        f"({term_clauses}) "
         f"and (mimeType='application/pdf' or mimeType contains 'image/') "
         f"and trashed=false"
     )
@@ -254,7 +390,9 @@ def _search_gmail(access_token: str, query: str) -> list[VaultCandidate]:
     """Search Gmail for messages with attachments matching the query."""
     candidates: list[VaultCandidate] = []
 
-    gmail_query = f"has:attachment filename:pdf {query}"
+    clean_terms = [t.strip() for t in query.replace("_", " ").split() if t.strip()]
+    search_keywords = " ".join(clean_terms) if clean_terms else query
+    gmail_query = f"has:attachment filename:(pdf OR jpg OR jpeg OR png) {search_keywords}"
     params = urllib.parse.urlencode({
         "q": gmail_query,
         "maxResults": 10,
@@ -439,7 +577,7 @@ def fetch_google_vault_file(
     if demo_mode or not access_token:
         # Infer document type from file_id
         query_hint = file_id.replace("demo_", "").replace("_", " ")
-        pdf_bytes = _generate_demo_pdf(query_hint)
+        pdf_bytes = _generate_demo_pdf(query_hint, file_id=file_id)
         filename = f"demo_certificate_{file_id}.pdf"
         return pdf_bytes, filename
 

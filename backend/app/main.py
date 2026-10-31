@@ -50,6 +50,8 @@ try:
         GoogleFetchRequest,
         GoogleSearchRequest,
         GoogleSearchResponse,
+        IntentClassifyRequest,
+        IntentClassifyResponse,
     )
 except ImportError:
     from backend.app import extractor, eligibility
@@ -67,6 +69,8 @@ except ImportError:
         GoogleFetchRequest,
         GoogleSearchRequest,
         GoogleSearchResponse,
+        IntentClassifyRequest,
+        IntentClassifyResponse,
     )
 
 # ---------------------------------------------------------------------------
@@ -87,7 +91,9 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:5173",  # Vite dev server (Member 3)
+        "http://127.0.0.1:5173",
         "http://localhost:3000",  # CRA fallback
+        "http://127.0.0.1:3000",
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -113,6 +119,7 @@ MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB
 
 
 @app.get("/health", tags=["meta"])
+@app.get("/api/health", tags=["meta"])
 async def health_check() -> dict:
     """
     Liveness probe. Returns `{"status": "ok"}`.
@@ -194,6 +201,23 @@ async def extract_document(
 
 
 @app.post(
+    "/api/intent/classify",
+    response_model=IntentClassifyResponse,
+    tags=["intent"],
+    summary="Classify citizen voice/text intent to matching scheme",
+)
+async def classify_intent(body: IntentClassifyRequest) -> IntentClassifyResponse:
+    """
+    Classifies the citizen's prompt or transcribed voice query to a matching
+    government scheme (e.g. '1784', 'vidyalakshmi', 'pm_kisan', 'ration_card').
+
+    Returns the matched service ID, human-readable name, confidence score,
+    and recommended document types for automatic Google Vault discovery.
+    """
+    return eligibility.classify_citizen_intent(body.text)
+
+
+@app.post(
     "/api/eligibility",
     response_model=EligibilityResponse,
     tags=["eligibility"],
@@ -256,6 +280,7 @@ async def apply_resume(body: ApplyResumeRequest) -> ApplyResumeResponse:
         session_id=body.session_id,
         captcha_text=body.captcha_text,
         approve=body.approve,
+        submit_final=body.submit_final,
     )
 
 
