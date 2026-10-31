@@ -842,17 +842,36 @@ const App: React.FC = () => {
       return;
     }
     setLoading(true);
+    setAgentRunning(true);
+    setAgentDone(false);
+    setAgentLog([
+      '🚀 Initializing Playwright browser in visible Chromium mode...',
+      '🌐 Navigating to ServicePlus citizen registration portal (serviceonline.gov.in)...',
+      '✍️ Autonomous agent mapping verified citizen profile to official portal fields...'
+    ]);
     try {
       const docFilename = profile.source_documents?.find(f => f.startsWith('saved:'))?.replace('saved:', '');
       const resp = await startApplication(profile, docFilename);
-      if (resp.log_steps) setAgentLog(resp.log_steps);
+      const steps = resp.steps_completed || resp.log_steps || [];
+      if (steps.length > 0) {
+        setAgentLog(steps);
+      }
       if (resp.session_id) setSessionId(resp.session_id);
       if (resp.page_preview_b64) setPageScreenshot(resp.page_preview_b64);
       if (resp.captcha_image_b64) setCaptchaScreenshot(resp.captcha_image_b64);
+      setAgentRunning(false);
       setAgentDone(true);
-      showToast(resp.message || 'Live agent launched.', 'success');
-    } catch {
-      showToast('Failed to start agent.', 'error');
+      if (resp.status === 'failed') {
+        showToast(resp.message || 'Agent encountered an issue.', 'error');
+        setAgentLog(prev => [...prev, `❌ [FAILED] ${resp.message || 'Agent failed to complete form.'}`]);
+      } else {
+        showToast(resp.message || 'Live agent completed filling fields. Please enter CAPTCHA.', 'success');
+      }
+    } catch (err: any) {
+      setAgentRunning(false);
+      const errMsg = err?.response?.data?.detail || err?.message || 'Failed to start agent.';
+      setAgentLog((prev) => [...prev, `❌ [ERROR] ${errMsg}`]);
+      showToast(`Failed to start agent: ${errMsg}`, 'error');
     } finally {
       setLoading(false);
     }
@@ -874,19 +893,28 @@ const App: React.FC = () => {
     }
 
     setLoading(true);
+    setAgentRunning(true);
+    setAgentLog((prev) => [
+      ...prev,
+      `✍️ [HUMAN VERIFICATION] Injecting solved CAPTCHA '${captchaText}' into portal...`,
+      action === 'SUBMIT' ? '🚀 [SUBMIT] Approving final application submission...' : '🔍 [REVIEW] Retaining form in review mode...'
+    ]);
     try {
       const resp = await resumeApplication(sessionId, captchaText, action === 'SUBMIT');
       if (resp.final_screenshot_b64) setPageScreenshot(resp.final_screenshot_b64);
       if (resp.status === 'submitted') {
         setSubmitted(true);
         if (resp.tracking_receipt) {
-          setAgentLog((prev) => [...prev, `🎉 [SUCCESS] Tracking Receipt: ${resp.tracking_receipt}`]);
+          setAgentLog((prev) => [...prev, `🎉 [SUCCESS] Official Tracking Receipt: ${resp.tracking_receipt}`]);
         }
       }
       showToast(resp.message || 'Action executed.', 'success');
-    } catch {
-      showToast('Resume action failed.', 'error');
+    } catch (err: any) {
+      const errMsg = err?.response?.data?.detail || err?.message || 'Resume action failed.';
+      setAgentLog((prev) => [...prev, `❌ [ERROR] ${errMsg}`]);
+      showToast(`Resume action failed: ${errMsg}`, 'error');
     } finally {
+      setAgentRunning(false);
       setLoading(false);
     }
   };
@@ -1435,8 +1463,24 @@ const App: React.FC = () => {
                   </p>
 
                   <div className="log-terminal" ref={logRef}>
-                    {agentLog.length === 0 && (
-                      <div className="terminal-line">Waiting for autonomous agent to connect…</div>
+                    {agentLog.length === 0 && !agentRunning && (
+                      <div style={{ textAlign: 'center', padding: '1.5rem 0.5rem' }}>
+                        <div className="terminal-line" style={{ marginBottom: '1rem', color: '#9ca3af' }}>
+                          Waiting for autonomous agent to connect…
+                        </div>
+                        <button
+                          type="button"
+                          className="gemini-btn gemini-btn-primary"
+                          onClick={handleStartAgent}
+                          disabled={loading}
+                          style={{ margin: '0 auto', display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}
+                        >
+                          🚀 Launch Autonomous Agent
+                        </button>
+                      </div>
+                    )}
+                    {agentLog.length === 0 && agentRunning && (
+                      <div className="terminal-line">Connecting to autonomous browser agent…</div>
                     )}
                     {agentLog.map((line, idx) => (
                       <div
