@@ -20,12 +20,20 @@ from __future__ import annotations
 from datetime import date
 from typing import Any, Callable, Optional
 
-from app.schemas import (
-    Category,
-    CitizenProfile,
-    EligibilityResponse,
-    RuleResult,
-)
+try:
+    from app.schemas import (
+        Category,
+        CitizenProfile,
+        EligibilityResponse,
+        RuleResult,
+    )
+except ImportError:
+    from backend.app.schemas import (
+        Category,
+        CitizenProfile,
+        EligibilityResponse,
+        RuleResult,
+    )
 
 # ---------------------------------------------------------------------------
 # Rule helpers

@@ -20,7 +20,10 @@ from typing import Optional
 
 import pymupdf as fitz  # PyMuPDF (pymupdf alias removes FutureWarning)
 
-from app.schemas import Category, CitizenProfile, ExtractResponse, Gender
+try:
+    from app.schemas import Category, CitizenProfile, ExtractResponse, Gender
+except ImportError:
+    from backend.app.schemas import Category, CitizenProfile, ExtractResponse, Gender
 
 # ---------------------------------------------------------------------------
 # Constants
