@@ -386,6 +386,10 @@ const App: React.FC = () => {
   const [portalPassword, setPortalPassword] = useState('ADmin@357');
   const [showPassword, setShowPassword] = useState(false);
   const [termsAccepted, setTermsAccepted] = useState(true);
+  const [selectedInstance, setSelectedInstance] = useState('National Portal (serviceonline.gov.in)');
+  const [showInstanceMenu, setShowInstanceMenu] = useState(false);
+  const [showEligibilityModal, setShowEligibilityModal] = useState(false);
+  const [showContactModal, setShowContactModal] = useState(false);
 
   // UI helpers
   const [loading, setLoading] = useState(false);
@@ -1528,20 +1532,14 @@ const App: React.FC = () => {
                       />
                     </div>
 
-                    <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'center' }}>
-                      <button
-                        className="gemini-btn gemini-btn-tonal"
-                        disabled={!captchaText || loading}
-                        onClick={() => handleResume('FILL_ONLY')}
-                      >
-                        Fill Only
-                      </button>
+                    <div style={{ display: 'flex', justifyContent: 'center' }}>
                       <button
                         className="gemini-btn gemini-btn-success"
+                        style={{ width: '100%' }}
                         disabled={!captchaText || loading}
                         onClick={() => handleResume('SUBMIT')}
                       >
-                        Approve & Submit
+                        {loading ? 'Submitting…' : 'Approve & Submit Registration'}
                       </button>
                     </div>
                   </div>
@@ -1712,9 +1710,71 @@ const App: React.FC = () => {
                         </div>
 
                         <div className="sp-top-links">
-                          <span className="sp-link">Select Instance ▾</span>
-                          <span className="sp-link">Check Eligibility</span>
-                          <span className="sp-link">Contact Us</span>
+                          {/* 1. Select Instance Dropdown */}
+                          <div style={{ position: 'relative' }}>
+                            <button
+                              type="button"
+                              className={`sp-link-btn ${showInstanceMenu ? 'active' : ''}`}
+                              onClick={() => setShowInstanceMenu(!showInstanceMenu)}
+                              title="Switch ServicePlus state instance"
+                            >
+                              <span>{selectedInstance.split(' ')[0]} Instance ▾</span>
+                            </button>
+
+                            {showInstanceMenu && (
+                              <div className="sp-dropdown-menu">
+                                {[
+                                  'National Portal (serviceonline.gov.in)',
+                                  'Uttar Pradesh (e-District)',
+                                  'Bihar (RTPS Portal)',
+                                  'Madhya Pradesh (e-Nagar Palika)',
+                                  'Tripura (e-District)',
+                                  'Karnataka (Seva Sindhu)',
+                                  'Assam (Sewa Setu)',
+                                  'Maharashtra (Aaple Sarkar)',
+                                ].map((inst) => (
+                                  <button
+                                    key={inst}
+                                    type="button"
+                                    className={`sp-dropdown-item ${selectedInstance === inst ? 'selected' : ''}`}
+                                    onClick={() => {
+                                      setSelectedInstance(inst);
+                                      setShowInstanceMenu(false);
+                                      showToast(`Switched instance to ${inst}`, 'success');
+                                      if (inst.includes('Uttar Pradesh')) setProfile((p) => ({ ...p, state: 'UTTAR PRADESH' }));
+                                      else if (inst.includes('Bihar')) setProfile((p) => ({ ...p, state: 'BIHAR' }));
+                                      else if (inst.includes('Madhya Pradesh')) setProfile((p) => ({ ...p, state: 'MADHYA PRADESH' }));
+                                      else if (inst.includes('Karnataka')) setProfile((p) => ({ ...p, state: 'KARNATAKA' }));
+                                      else if (inst.includes('Maharashtra')) setProfile((p) => ({ ...p, state: 'MAHARASHTRA' }));
+                                    }}
+                                  >
+                                    <span>{inst}</span>
+                                    {selectedInstance === inst && <span>✓</span>}
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+
+                          {/* 2. Check Eligibility Modal Trigger */}
+                          <button
+                            type="button"
+                            className="sp-link-btn"
+                            onClick={() => setShowEligibilityModal(true)}
+                            title="View official scheme criteria and guidelines"
+                          >
+                            <span>📋 Check Eligibility</span>
+                          </button>
+
+                          {/* 3. Contact Us Modal Trigger */}
+                          <button
+                            type="button"
+                            className="sp-link-btn"
+                            onClick={() => setShowContactModal(true)}
+                            title="Open official NIC ServicePlus Helpdesk & Contacts"
+                          >
+                            <span>📞 Contact Us</span>
+                          </button>
                         </div>
                       </div>
 
@@ -1863,7 +1923,17 @@ const App: React.FC = () => {
                               type="button"
                               className="sp-captcha-btn"
                               title="Listen to CAPTCHA"
-                              onClick={() => showToast('CAPTCHA audio playback available', 'info')}
+                              onClick={() => {
+                                if ('speechSynthesis' in window) {
+                                  const textToRead = captchaText || '3 W B V 4 3';
+                                  const utt = new SpeechSynthesisUtterance(textToRead.split('').join(' '));
+                                  utt.rate = 0.8;
+                                  window.speechSynthesis.speak(utt);
+                                  showToast('Playing audio CAPTCHA...', 'info');
+                                } else {
+                                  showToast('Audio playback not supported in this browser', 'info');
+                                }
+                              }}
                             >
                               🔊
                             </button>
@@ -1890,23 +1960,16 @@ const App: React.FC = () => {
                           </label>
                         </div>
 
-                        {/* Action Buttons directly inside the Form */}
+                        {/* Single Primary Action Button */}
                         <div className="sp-form-actions">
                           <button
                             type="button"
-                            className="sp-action-btn-secondary"
-                            disabled={loading}
-                            onClick={() => handleResume('FILL_ONLY')}
-                          >
-                            Validate & Fill Only
-                          </button>
-                          <button
-                            type="button"
                             className="sp-action-btn-primary"
+                            style={{ width: '100%' }}
                             disabled={!captchaText || loading || !termsAccepted}
                             onClick={() => handleResume('SUBMIT')}
                           >
-                            {loading ? 'Submitting…' : 'Submit Registration'}
+                            {loading ? 'Submitting to Official Portal…' : 'Submit Registration'}
                           </button>
                         </div>
                       </div>
@@ -2071,6 +2134,154 @@ const App: React.FC = () => {
                 )}
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* ───── ServicePlus Scheme Eligibility Modal ───── */}
+      {showEligibilityModal && (
+        <div className="sp-modal-backdrop" onClick={() => setShowEligibilityModal(false)}>
+          <div className="sp-modal-card" onClick={(e) => e.stopPropagation()}>
+            <div className="sp-modal-header">
+              <div className="sp-modal-title">
+                <span>📋</span>
+                <span>ServicePlus Scheme Eligibility Criteria</span>
+              </div>
+              <button
+                type="button"
+                className="sp-modal-close-btn"
+                onClick={() => setShowEligibilityModal(false)}
+              >
+                ✕
+              </button>
+            </div>
+            <div className="sp-modal-body">
+              <div style={{ marginBottom: '1rem', padding: '0.75rem', background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '6px' }}>
+                <strong style={{ color: '#166534' }}>Construction Worker Registration / Welfare Scheme (1784)</strong>
+                <div style={{ fontSize: '0.78rem', color: '#15803d', marginTop: '4px' }}>
+                  National ServicePlus Framework — Ministry of Labour & Employment / State Welfare Board
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                <div className="sp-contact-row">
+                  <div className="sp-contact-icon">✅</div>
+                  <div>
+                    <div className="sp-contact-label">Age Requirement</div>
+                    <div className="sp-contact-val">Citizen must be between 18 and 60 years old.</div>
+                  </div>
+                </div>
+
+                <div className="sp-contact-row">
+                  <div className="sp-contact-icon">✅</div>
+                  <div>
+                    <div className="sp-contact-label">Income Ceiling</div>
+                    <div className="sp-contact-val">Annual household income must be under ₹3,00,000 threshold.</div>
+                  </div>
+                </div>
+
+                <div className="sp-contact-row">
+                  <div className="sp-contact-icon">✅</div>
+                  <div>
+                    <div className="sp-contact-label">Mandatory Documents</div>
+                    <div className="sp-contact-val">Aadhaar Card, Income Certificate, and valid Mobile Number.</div>
+                  </div>
+                </div>
+
+                <div className="sp-contact-row">
+                  <div className="sp-contact-icon">✅</div>
+                  <div>
+                    <div className="sp-contact-label">Domicile Requirement</div>
+                    <div className="sp-contact-val">Resident of the respective state / portal instance ({profile.state || 'Uttar Pradesh'}).</div>
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ marginTop: '1.25rem', textAlign: 'right' }}>
+                <button
+                  type="button"
+                  className="sp-action-btn-primary"
+                  onClick={() => setShowEligibilityModal(false)}
+                >
+                  Understood
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ───── ServicePlus Official Helpdesk Contact Modal ───── */}
+      {showContactModal && (
+        <div className="sp-modal-backdrop" onClick={() => setShowContactModal(false)}>
+          <div className="sp-modal-card" onClick={(e) => e.stopPropagation()}>
+            <div className="sp-modal-header">
+              <div className="sp-modal-title">
+                <span>🏛️</span>
+                <span>ServicePlus Official Helpdesk & Support</span>
+              </div>
+              <button
+                type="button"
+                className="sp-modal-close-btn"
+                onClick={() => setShowContactModal(false)}
+              >
+                ✕
+              </button>
+            </div>
+            <div className="sp-modal-body">
+              <div style={{ marginBottom: '1rem', padding: '0.75rem', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '6px' }}>
+                <strong style={{ color: '#1e40af' }}>National Informatics Centre (NIC)</strong>
+                <div style={{ fontSize: '0.78rem', color: '#1d4ed8', marginTop: '4px' }}>
+                  Ministry of Electronics & Information Technology, Government of India
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                <div className="sp-contact-row">
+                  <div className="sp-contact-icon">📞</div>
+                  <div>
+                    <div className="sp-contact-label">National Toll-Free Helpline</div>
+                    <div className="sp-contact-val">1800 111 555 / 011-24305000</div>
+                  </div>
+                </div>
+
+                <div className="sp-contact-row">
+                  <div className="sp-contact-icon">✉️</div>
+                  <div>
+                    <div className="sp-contact-label">Technical Support Email</div>
+                    <div className="sp-contact-val">support-serviceplus@gov.in</div>
+                  </div>
+                </div>
+
+                <div className="sp-contact-row">
+                  <div className="sp-contact-icon">🏢</div>
+                  <div>
+                    <div className="sp-contact-label">Headquarters Address</div>
+                    <div className="sp-contact-val">
+                      National Informatics Centre, A-Block, CGO Complex, Lodhi Road, New Delhi, 110003
+                    </div>
+                  </div>
+                </div>
+
+                <div className="sp-contact-row">
+                  <div className="sp-contact-icon">⏰</div>
+                  <div>
+                    <div className="sp-contact-label">Operating Hours</div>
+                    <div className="sp-contact-val">Monday to Saturday: 9:00 AM – 6:00 PM IST (Excl. Gazetted Holidays)</div>
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ marginTop: '1.25rem', textAlign: 'right' }}>
+                <button
+                  type="button"
+                  className="sp-action-btn-primary"
+                  onClick={() => setShowContactModal(false)}
+                >
+                  Close Helpdesk
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

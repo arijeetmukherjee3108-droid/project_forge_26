@@ -2056,18 +2056,177 @@ select.gemini-input option {
 .sp-top-links {
   display: flex;
   align-items: center;
-  gap: 1.1rem;
+  gap: 0.6rem;
+  position: relative;
 }
 
-.sp-link {
+.sp-link-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  padding: 0.35rem 0.65rem;
+  border-radius: 4px;
   font-size: 0.78rem;
   color: #334155;
   font-weight: 600;
   cursor: pointer;
-  transition: color 0.2s;
+  transition: all 0.2s;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-family: inherit;
 }
 
-.sp-link:hover {
+.sp-link-btn:hover {
+  color: #0284c7;
+  background: #f1f5f9;
+  border-color: #cbd5e1;
+}
+
+.sp-link-btn.active {
+  background: #e0f2fe;
+  color: #0369a1;
+  border-color: #7dd3fc;
+}
+
+.sp-dropdown-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 0.4rem;
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.15), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+  min-width: 260px;
+  z-index: 100;
+  padding: 0.4rem 0;
+}
+
+.sp-dropdown-item {
+  width: 100%;
+  padding: 0.55rem 1rem;
+  text-align: left;
+  background: transparent;
+  border: none;
+  font-size: 0.8rem;
+  color: #1e293b;
+  font-weight: 500;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  transition: background 0.15s;
+}
+
+.sp-dropdown-item:hover {
+  background: #f1f5f9;
+  color: #0284c7;
+}
+
+.sp-dropdown-item.selected {
+  background: #f0fdf4;
+  color: #166534;
+  font-weight: 700;
+}
+
+/* ServicePlus Portal Modals (Eligibility & Contact) */
+.sp-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.65);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2000;
+  padding: 1rem;
+}
+
+.sp-modal-card {
+  background: #ffffff;
+  border-radius: 12px;
+  width: 100%;
+  max-width: 520px;
+  max-height: 85vh;
+  overflow-y: auto;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.25);
+  border: 1px solid #cbd5e1;
+  position: relative;
+  animation: spModalSlide 0.2s ease-out;
+}
+
+@keyframes spModalSlide {
+  from { opacity: 0; transform: translateY(12px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.sp-modal-header {
+  padding: 1.15rem 1.4rem;
+  border-bottom: 1px solid #e2e8f0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #f8fafc;
+  border-radius: 12px 12px 0 0;
+}
+
+.sp-modal-title {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: #0f172a;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.sp-modal-close-btn {
+  background: transparent;
+  border: none;
+  font-size: 1.1rem;
+  cursor: pointer;
+  color: #64748b;
+  padding: 0.2rem 0.5rem;
+  border-radius: 4px;
+}
+
+.sp-modal-close-btn:hover {
+  background: #e2e8f0;
+  color: #0f172a;
+}
+
+.sp-modal-body {
+  padding: 1.25rem 1.4rem;
+  font-size: 0.85rem;
+  color: #334155;
+  line-height: 1.5;
+}
+
+.sp-contact-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.75rem 0;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.sp-contact-icon {
+  font-size: 1.2rem;
+  line-height: 1;
+}
+
+.sp-contact-label {
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: #64748b;
+  margin-bottom: 2px;
+}
+
+.sp-contact-val {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: #0f172a;
+}
   color: #0284c7;
 }
 
