@@ -28,6 +28,7 @@ from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import extractor, eligibility
+from app.browser_agent import start_application, resume_application
 from app.schemas import (
     AgentStatus,
     ApplyResumeRequest,
@@ -184,39 +185,18 @@ async def check_eligibility(body: EligibilityRequest) -> EligibilityResponse:
     "/api/apply/start",
     response_model=ApplyStartResponse,
     tags=["apply"],
-    summary="(PLACEHOLDER) Start a browser-agent session to fill a government form",
+    summary="Start a browser-agent session to fill a government form",
 )
 async def apply_start(body: ApplyStartRequest) -> ApplyStartResponse:
     """
-    **PLACEHOLDER** — returns a fake response while Member 1's browser_agent.py
-    is being built.
-
-    In Step C2 this will:
-    1. Call `browser_agent.start_session(profile, service_id, document_filename)`
-    2. Navigate to the ServicePlus portal and pre-fill fields.
-    3. Pause at the CAPTCHA and return `status=awaiting_captcha` with a
-       base-64 screenshot so the citizen can solve it in the React UI.
-
-    # TODO(Step C2): connect browser_agent
-    # Expected call signature (to confirm with Member 1):
-    #   session_id, captcha_b64, preview_b64, steps = browser_agent.start_session(
-    #       profile=body.profile,
-    #       service_id=body.service_id,
-    #       document_path=body.document_filename,
-    #   )
+    Starts the autonomous Playwright browser agent to navigate and pre-fill fields
+    on the government portal. Pauses at the CAPTCHA checkpoint and returns the
+    cropped CAPTCHA and page preview for human verification.
     """
-    # TODO(Step C2): connect browser_agent
-    fake_session_id = f"FAKE-SESSION-{uuid.uuid4().hex[:8].upper()}"
-    return ApplyStartResponse(
-        session_id=fake_session_id,
-        status=AgentStatus.awaiting_captcha,
-        message=(
-            "PLACEHOLDER: browser agent not yet connected. "
-            "The real agent (Member 1) will fill the portal form and pause here for your CAPTCHA."
-        ),
-        captcha_image_b64=None,
-        page_preview_b64=None,
-        steps_completed=["(placeholder) form navigation simulated"],
+    return await start_application(
+        profile=body.profile,
+        service_id=body.service_id,
+        document_filename=body.document_filename,
     )
 
 
@@ -224,44 +204,15 @@ async def apply_start(body: ApplyStartRequest) -> ApplyStartResponse:
     "/api/apply/resume",
     response_model=ApplyResumeResponse,
     tags=["apply"],
-    summary="(PLACEHOLDER) Resume a paused browser-agent session after CAPTCHA entry",
+    summary="Resume a paused browser-agent session after CAPTCHA entry",
 )
 async def apply_resume(body: ApplyResumeRequest) -> ApplyResumeResponse:
     """
-    **PLACEHOLDER** — returns a fake submitted receipt while Member 1's
-    browser_agent.py is being built.
-
-    In Step C2 this will:
-    1. Look up the active Playwright session by `session_id`.
-    2. Type `captcha_text` into the CAPTCHA field.
-    3. If `approve=True`, click Submit and return the tracking receipt.
-    4. If `approve=False`, abort the session gracefully.
-
-    # TODO(Step C2): connect browser_agent
-    # Expected call signature (to confirm with Member 1):
-    #   receipt, screenshot_b64 = browser_agent.resume_session(
-    #       session_id=body.session_id,
-    #       captcha_text=body.captcha_text,
-    #       approve=body.approve,
-    #   )
+    Resumes the active Playwright browser session by typing the citizen's solved
+    CAPTCHA into the portal and completing submission upon user approval.
     """
-    # TODO(Step C2): connect browser_agent
-    if not body.approve:
-        return ApplyResumeResponse(
-            session_id=body.session_id,
-            status=AgentStatus.failed,
-            message="Application aborted by citizen.",
-            tracking_receipt=None,
-            final_screenshot_b64=None,
-        )
-
-    return ApplyResumeResponse(
+    return await resume_application(
         session_id=body.session_id,
-        status=AgentStatus.submitted,
-        message=(
-            "PLACEHOLDER: submission simulated successfully. "
-            "In production the real tracking receipt from ServicePlus will appear here."
-        ),
-        tracking_receipt="FAKE-RECEIPT-001",
-        final_screenshot_b64=None,
+        captcha_text=body.captcha_text,
+        approve=body.approve,
     )
