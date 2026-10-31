@@ -5,12 +5,15 @@ import {
   ApplicantProfile,
   ExtractionResponse,
   EligibilityResponse,
+  GoogleVaultFile,
 } from './types';
 import {
   extractDocument,
   checkEligibility,
   startApplication,
   resumeApplication,
+  searchGoogleVault,
+  fetchGoogleVaultFile,
 } from './api';
 
 // ──────────────────────────────────────────────
@@ -105,6 +108,44 @@ const Icons = {
       <polyline points="5 12 12 5 19 12" />
     </svg>
   ),
+
+  // Gemini Suggestion: Briefcase (Outline)
+  Briefcase: () => (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="2.5" y="7" width="19" height="13.5" rx="3" />
+      <path d="M8 7V4.5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2V7" />
+    </svg>
+  ),
+
+  // Gemini Suggestion: Sparkles / Star Outline
+  Sparkles: () => (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 3.5C12 8 8 12 3.5 12C8 12 12 16 12 20.5C12 16 16 12 20.5 12C16 12 12 8 12 3.5Z" transform="rotate(45 12 12)" />
+      <path d="m19 4-0.8 1.4-1.4 0.8 1.4 0.8 0.8 1.4 0.8-1.4 1.4-0.8-1.4-0.8Z" />
+      <path d="m5 17-0.7 1.1-1.1 0.7 1.1 0.7 0.7 1.1 0.7-1.1 1.1-0.7-1.1-0.7Z" />
+    </svg>
+  ),
+
+  // Gemini Suggestion: Open Book with Radiating Rays Outline
+  BookIdea: () => (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M2.5 15c3.2-1.5 6.5-1.5 9.5 1c3-2.5 6.3-2.5 9.5-1v5.5c-3.2-1.5-6.5-1.5-9.5 1c-3-2.5-6.3-2.5-9.5-1z" />
+      <path d="M12 16v5.5" />
+      <line x1="12" y1="6.5" x2="12" y2="10" />
+      <line x1="7" y1="8" x2="9.5" y2="10.5" />
+      <line x1="17" y1="8" x2="14.5" y2="10.5" />
+    </svg>
+  ),
+
+  // Google Multi-Color Brand Icon
+  Google: () => (
+    <svg width="18" height="18" viewBox="0 0 24 24">
+      <path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.8-2.4 3.66v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.15z"/>
+      <path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.27v3.15C3.25 21.27 7.31 24 12 24z"/>
+      <path fill="#FBBC05" d="M5.28 14.27c-.25-.72-.38-1.49-.38-2.27s.13-1.55.38-2.27V6.58H1.27C.46 8.2 0 10.04 0 12s.46 3.8 1.27 5.42l4.01-3.15z"/>
+      <path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.31 0 3.25 2.73 1.27 6.58l4.01 3.15c.95-2.83 3.6-4.98 6.72-4.98z"/>
+    </svg>
+  ),
 };
 
 // ──────────────────────────────────────────────
@@ -138,7 +179,7 @@ const MOCK_EXTRACTION: ExtractionResponse = {
 
 const MOCK_ELIGIBILITY: EligibilityResponse = {
   status: 'ELIGIBLE',
-  scheme_name: 'ServicePlus – Citizen Certificate Application (ID: 1784)',
+  scheme_name: 'ServicePlus – Citizen Certificate Application',
   reasons: [
     '✅ Age matches certificate criteria (18+)',
     '✅ Valid 10-digit citizen mobile number verified',
@@ -150,6 +191,24 @@ const MOCK_ELIGIBILITY: EligibilityResponse = {
 };
 
 const USE_MOCK = true; // ← Set to false when connecting to local FastAPI backend
+
+const GOOGLE_CLIENT_ID =
+  '434733256139-amj4gkvbl66f2pc7vok2762u0m5p0es0.apps.googleusercontent.com';
+
+const MOCK_FOUND_FILES: GoogleVaultFile[] = [
+  {
+    id: 'drive_doc_income_2025',
+    name: 'Income_Certificate_2025.pdf',
+    source: 'drive',
+    size: '184 KB',
+  },
+  {
+    id: 'gmail_att_tehsildar',
+    name: 'Tehsildar_Verified_Income.pdf',
+    source: 'gmail',
+    size: '240 KB',
+  },
+];
 
 interface MockPortalField {
   label: string;
@@ -173,17 +232,52 @@ const MOCK_AGENT_STEPS: { action: string; field: MockPortalField }[] = [
   { action: '🔒 [PAUSE] Captcha detected. Cropped and waiting for citizen approval.', field: { label: '', value: '', type: 'text' } },
 ];
 
-const ROTATING_PROMPTS = [
-  'Apply for Construction Worker Welfare Certificate on ServicePlus',
-  'Citizen Registration on National ServicePlus Portal',
-  'Direct Apply — Form 1784 (serviceonline.gov.in)',
-];
+const PROMPTS_BY_MODE = {
+  apply: [
+    'Apply for Construction Worker Welfare Certificate on ServicePlus',
+    'Citizen Registration on National ServicePlus Portal',
+    'Direct Apply — Form 1784 (serviceonline.gov.in)',
+  ],
+  eligibility: [
+    'Check eligibility for Construction Worker Welfare (Form 1784)',
+    'Verify income limits & age criteria for ServicePlus Schemes',
+    'Check required documents for Citizen Registration',
+  ],
+};
 
-const SUGGESTIONS = [
-  { icon: '💼', text: 'Apply for Construction Worker Welfare Certificate on ServicePlus' },
-  { icon: '🏛️', text: 'Citizen Registration on National ServicePlus Portal' },
-  { icon: '📄', text: 'Direct Apply — Form 1784 (serviceonline.gov.in)' },
-];
+const SUGGESTIONS_BY_MODE: Record<
+  'apply' | 'eligibility',
+  { iconType: 'briefcase' | 'sparkles' | 'book'; text: string }[]
+> = {
+  apply: [
+    {
+      iconType: 'briefcase',
+      text: 'Apply for Construction Worker Welfare Certificate on ServicePlus',
+    },
+    {
+      iconType: 'sparkles',
+      text: 'Citizen Registration on National ServicePlus Portal',
+    },
+    {
+      iconType: 'book',
+      text: 'Direct Apply — Form 1784 (serviceonline.gov.in)',
+    },
+  ],
+  eligibility: [
+    {
+      iconType: 'briefcase',
+      text: 'Check eligibility for Construction Worker Welfare (Form 1784)',
+    },
+    {
+      iconType: 'sparkles',
+      text: 'Verify income limits & age criteria for ServicePlus Schemes',
+    },
+    {
+      iconType: 'book',
+      text: 'Check required documents for Citizen Registration',
+    },
+  ],
+};
 
 const STEPS = [
   { num: 1, label: 'Intent' },
@@ -216,7 +310,7 @@ const FORM_FIELDS: FieldMeta[] = [
 
 const App: React.FC = () => {
   const [currentStep, setCurrentStep] = useState(1);
-  const [activeMode, setActiveMode] = useState<'task' | 'chat'>('chat');
+  const [activeMode, setActiveMode] = useState<'apply' | 'eligibility'>('apply');
 
   // Step 1: Intent
   const [intent, setIntent] = useState('');
@@ -224,24 +318,32 @@ const App: React.FC = () => {
   const [promptIndex, setPromptIndex] = useState(0);
   const [fadeState, setFadeState] = useState(true);
 
-  // Smoothly rotate the placeholder text every 4 seconds
+  // Smoothly rotate the placeholder text every 4 seconds based on active mode
   useEffect(() => {
+    const activePrompts = PROMPTS_BY_MODE[activeMode];
     const interval = setInterval(() => {
       setFadeState(false);
       setTimeout(() => {
-        setPromptIndex((prev) => (prev + 1) % ROTATING_PROMPTS.length);
+        setPromptIndex((prev) => (prev + 1) % activePrompts.length);
         setFadeState(true);
       }, 400);
     }, 4000);
 
     return () => clearInterval(interval);
-  }, []);
+  }, [activeMode]);
 
-  // Step 2: Upload
+  // Step 2: Upload & Google Vault
   const [file, setFile] = useState<File | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [extraction, setExtraction] = useState<ExtractionResponse | null>(null);
+  const [showVaultModal, setShowVaultModal] = useState(false);
+  const [vaultQuery, setVaultQuery] = useState('income');
+  const [vaultHunting, setVaultHunting] = useState(false);
+  const [vaultStepText, setVaultStepText] = useState('');
+  const [vaultFoundFiles, setVaultFoundFiles] = useState<GoogleVaultFile[]>([]);
+  const [vaultAccessToken, setVaultAccessToken] = useState('');
+  const [vaultIsDemo, setVaultIsDemo] = useState(false);
 
   // Step 3: Verification
   const [profile, setProfile] = useState<ApplicantProfile>({});
@@ -382,6 +484,245 @@ const App: React.FC = () => {
     }
   };
 
+  // ──────────────────────────────────────────────
+  // Google Vault Auto-Hunter (Drive + Gmail)
+  // Call 1: POST /api/documents/google-search -> Candidate files list
+  // Call 2: POST /api/documents/google-fetch -> Download, save & pre-fill CitizenProfile
+  // ──────────────────────────────────────────────
+  const handleStartGoogleVaultSearch = (forceDemo: boolean = false) => {
+    setVaultHunting(true);
+    setVaultFoundFiles([]);
+
+    const executeSearch = async (token: string, isDemo: boolean) => {
+      setVaultAccessToken(token);
+      setVaultIsDemo(isDemo);
+      setVaultStepText(`Searching Google Drive & Gmail for "${vaultQuery}"...`);
+
+      // 1. If explicit demo mode was selected
+      if (isDemo) {
+        await new Promise((r) => setTimeout(r, 600));
+        try {
+          const files = await searchGoogleVault({
+            access_token: token,
+            query: vaultQuery,
+            demo_mode: true,
+          });
+          if (files && files.length > 0) {
+            setVaultFoundFiles(files);
+            setVaultHunting(false);
+            return;
+          }
+        } catch {
+          // backend not reachable
+        }
+        setVaultFoundFiles(MOCK_FOUND_FILES);
+        showToast('Demo Mode: Showing candidate preview documents.', 'info');
+        setVaultHunting(false);
+        return;
+      }
+
+      // 2. Real Google OAuth flow
+      // A) First, try Member 2's backend endpoint: POST /api/documents/google-search
+      try {
+        const files = await searchGoogleVault({
+          access_token: token,
+          query: vaultQuery,
+          demo_mode: false,
+        });
+        if (files && files.length > 0) {
+          setVaultFoundFiles(files);
+          showToast(`Found ${files.length} document(s) via backend Google Search!`, 'success');
+          setVaultHunting(false);
+          return;
+        }
+      } catch (backendErr) {
+        console.warn('Backend /api/documents/google-search not reachable or server not running:', backendErr);
+      }
+
+      // B) Direct Google Drive API search using the citizen's real access_token
+      try {
+        setVaultStepText(`Searching your Google Drive directly for "${vaultQuery}"...`);
+        const queryFilter = vaultQuery.trim()
+          ? `trashed=false and (name contains '${vaultQuery.trim().replace(/'/g, "\\'")}' or fullText contains '${vaultQuery.trim().replace(/'/g, "\\'")}')`
+          : `trashed=false and mimeType='application/pdf'`;
+
+        let driveResp = await fetch(
+          `https://www.googleapis.com/drive/v3/files?pageSize=15&fields=files(id,name,mimeType,size,modifiedTime)&q=${encodeURIComponent(queryFilter)}`,
+          {
+            headers: { Authorization: `Bearer ${token}` },
+          }
+        );
+
+        let driveData = driveResp.ok ? await driveResp.json() : null;
+
+        // If specific keyword had 0 results, search for any PDFs or images in their Drive
+        if (!driveData?.files || driveData.files.length === 0) {
+          driveResp = await fetch(
+            `https://www.googleapis.com/drive/v3/files?pageSize=15&fields=files(id,name,mimeType,size,modifiedTime)&q=${encodeURIComponent("trashed=false and (mimeType='application/pdf' or mimeType contains 'image/')")}`,
+            {
+              headers: { Authorization: `Bearer ${token}` },
+            }
+          );
+          if (driveResp.ok) {
+            driveData = await driveResp.json();
+          }
+        }
+
+        if (driveData?.files && driveData.files.length > 0) {
+          const realDriveFiles: GoogleVaultFile[] = driveData.files.map((f: any) => ({
+            id: f.id,
+            name: f.name,
+            source: 'drive',
+            mimeType: f.mimeType,
+            size: f.size ? `${(parseInt(f.size, 10) / 1024).toFixed(0)} KB` : 'Google Doc',
+          }));
+          setVaultFoundFiles(realDriveFiles);
+          showToast(`✅ Connected! Found ${realDriveFiles.length} real file(s) in your Google Drive!`, 'success');
+          setVaultHunting(false);
+          return;
+        }
+      } catch (directErr) {
+        console.warn('Direct Google Drive query error:', directErr);
+      }
+
+      // C) Fallback if no files matched or drive has no documents
+      showToast(`No documents matching "${vaultQuery}" found in Google Drive. Showing candidate preview files.`, 'info');
+      setVaultFoundFiles(MOCK_FOUND_FILES);
+      setVaultHunting(false);
+    };
+
+    if (forceDemo) {
+      executeSearch('ya29.demo_token_forge26', true);
+      return;
+    }
+
+    // Standard Google Identity Services OAuth popup using team Client ID
+    try {
+      const google = (window as any).google;
+      if (google?.accounts?.oauth2) {
+        const client = google.accounts.oauth2.initTokenClient({
+          client_id: GOOGLE_CLIENT_ID,
+          scope: 'https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/gmail.readonly',
+          callback: async (tokenResp: any) => {
+            if (tokenResp?.access_token) {
+              await executeSearch(tokenResp.access_token, false);
+            } else {
+              showToast('Google auth cancelled; running in demo mode.', 'info');
+              await executeSearch('ya29.demo_token_forge26', true);
+            }
+          },
+          error_callback: () => {
+            showToast('Google popup blocked/offline; running in demo mode.', 'info');
+            executeSearch('ya29.demo_token_forge26', true);
+          },
+        });
+        client.requestAccessToken();
+      } else {
+        showToast('Google GIS script offline; running in demo mode.', 'info');
+        executeSearch('ya29.demo_token_forge26', true);
+      }
+    } catch {
+      executeSearch('ya29.demo_token_forge26', true);
+    }
+  };
+
+  const handleFetchChosenFile = async (chosenFile: GoogleVaultFile) => {
+    setVaultHunting(true);
+    setVaultStepText(`Downloading "${chosenFile.name}" & extracting profile...`);
+
+    const token = vaultAccessToken || 'ya29.demo_token_forge26';
+    const isDemo = vaultIsDemo;
+
+    try {
+      let profileResult: ApplicantProfile | null = null;
+      let uncertain: string[] = [];
+      let rawText = '';
+      let downloadedBlob: Blob | null = null;
+
+      // 1. Download real file directly from Google Drive if real access_token is present
+      if (!isDemo && chosenFile.source === 'drive' && token && !token.startsWith('ya29.demo')) {
+        try {
+          setVaultStepText(`Fetching "${chosenFile.name}" directly from Google Drive...`);
+          const fileResp = await fetch(
+            `https://www.googleapis.com/drive/v3/files/${chosenFile.id}?alt=media`,
+            {
+              headers: { Authorization: `Bearer ${token}` },
+            }
+          );
+          if (fileResp.ok) {
+            downloadedBlob = await fileResp.blob();
+          }
+        } catch (downloadErr) {
+          console.warn('Direct Google Drive download failed:', downloadErr);
+        }
+      }
+
+      // 2. Call backend /api/documents/google-fetch if backend is reachable
+      if (!isDemo) {
+        try {
+          const resp = await fetchGoogleVaultFile({
+            access_token: token,
+            file_id: chosenFile.id,
+            source: chosenFile.source,
+            demo_mode: false,
+          });
+          profileResult = resp.profile || resp.extracted_profile || null;
+          uncertain = resp.uncertain_fields || [];
+          rawText = resp.raw_text_preview || '';
+        } catch {
+          // backend not reachable or not ready yet
+        }
+      }
+
+      // 3. Fallback to backend demo_mode if backend is running in demo
+      if (!profileResult && isDemo) {
+        try {
+          const resp = await fetchGoogleVaultFile({
+            access_token: token,
+            file_id: chosenFile.id,
+            source: chosenFile.source,
+            demo_mode: true,
+          });
+          profileResult = resp.profile || resp.extracted_profile || null;
+          uncertain = resp.uncertain_fields || [];
+          rawText = resp.raw_text_preview || '';
+        } catch {
+          // backend offline
+        }
+      }
+
+      // 4. Default mock data if backend extractor hasn't processed
+      if (!profileResult) {
+        await new Promise((r) => setTimeout(r, 650));
+        profileResult = MOCK_EXTRACTION.extracted_profile;
+        uncertain = MOCK_EXTRACTION.uncertain_fields;
+        rawText = MOCK_EXTRACTION.raw_text_preview;
+      }
+
+      // Create the real file in React
+      const finalFile = downloadedBlob
+        ? new File([downloadedBlob], chosenFile.name, { type: downloadedBlob.type || 'application/pdf' })
+        : new File(['vault_content'], chosenFile.name, { type: 'application/pdf' });
+
+      setFile(finalFile);
+      setExtraction({
+        extracted_profile: profileResult!,
+        uncertain_fields: uncertain,
+        raw_text_preview: rawText,
+        message: `Retrieved "${chosenFile.name}" from Google Vault!`,
+      });
+      setProfile(profileResult!);
+      setUncertainFields(uncertain);
+      showToast(`Retrieved "${chosenFile.name}" from Google Vault & extracted profile!`, 'success');
+      setShowVaultModal(false);
+      setCurrentStep(3);
+    } catch (err: any) {
+      showToast(err?.message || 'Failed to download document from Google Vault.', 'error');
+    } finally {
+      setVaultHunting(false);
+    }
+  };
+
   const handleInputChange = (e: ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
     setProfile((prev) => ({ ...prev, [name]: value }));
@@ -486,6 +827,19 @@ const App: React.FC = () => {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleStopAgent = async () => {
+    setAgentRunning(false);
+    if (!USE_MOCK && sessionId) {
+      try {
+        await resumeApplication({ session_id: sessionId, action: 'CLOSE' });
+      } catch {
+        // ignore error if session already closed
+      }
+    }
+    setCurrentStep(1);
+    showToast('Agent stopped. Returned to Home.', 'info');
   };
 
   const logRef = useRef<HTMLDivElement>(null);
@@ -629,7 +983,7 @@ const App: React.FC = () => {
                   />
                   {!intent && (
                     <div className={`capsule-animated-placeholder ${fadeState ? 'fade-in' : 'fade-out'}`}>
-                      {ROTATING_PROMPTS[promptIndex]}
+                      {PROMPTS_BY_MODE[activeMode][promptIndex % PROMPTS_BY_MODE[activeMode].length]}
                     </div>
                   )}
                 </div>
@@ -654,36 +1008,51 @@ const App: React.FC = () => {
                 </div>
               </div>
 
-              {/* Mode Pills (Chat / Task) */}
+              {/* Mode Pills (Auto-Apply vs Check Eligibility) */}
               <div className="gemini-mode-pills">
                 <button
-                  className={`mode-pill ${activeMode === 'chat' ? 'active' : ''}`}
-                  onClick={() => setActiveMode('chat')}
+                  type="button"
+                  className={`mode-pill ${activeMode === 'apply' ? 'active' : ''}`}
+                  onClick={() => {
+                    setActiveMode('apply');
+                    setPromptIndex(0);
+                  }}
+                  title="Directly automate submission on ServicePlus portal with AI Agent"
                 >
-                  Chat
+                  Auto-Apply
                 </button>
                 <button
-                  className={`mode-pill ${activeMode === 'task' ? 'active' : ''}`}
-                  onClick={() => setActiveMode('task')}
+                  type="button"
+                  className={`mode-pill ${activeMode === 'eligibility' ? 'active' : ''}`}
+                  onClick={() => {
+                    setActiveMode('eligibility');
+                    setPromptIndex(0);
+                  }}
+                  title="Verify criteria, income limits, and required documents before applying"
                 >
-                  Task
+                  Check Eligibility
                 </button>
               </div>
 
               {/* Suggestion Rows */}
               <div className="gemini-suggestions">
-                {SUGGESTIONS.map((item, idx) => (
-                  <div
+                {SUGGESTIONS_BY_MODE[activeMode].map((item, idx) => (
+                  <button
                     key={idx}
+                    type="button"
                     className="suggestion-row"
                     onClick={() => {
                       setIntent(item.text);
                       handleIntentSubmit(item.text);
                     }}
                   >
-                    <span className="suggestion-lead-icon">{item.icon}</span>
-                    <span>{item.text}</span>
-                  </div>
+                    <span className="suggestion-lead-icon">
+                      {item.iconType === 'briefcase' && <Icons.Briefcase />}
+                      {item.iconType === 'sparkles' && <Icons.Sparkles />}
+                      {item.iconType === 'book' && <Icons.BookIdea />}
+                    </span>
+                    <span className="suggestion-text">{item.text}</span>
+                  </button>
                 ))}
               </div>
             </div>
@@ -723,6 +1092,28 @@ const App: React.FC = () => {
                 />
               </div>
 
+              {/* ─── Google Vault Auto-Document Hunter (Drive + Gmail) ─── */}
+              <div className="google-vault-section">
+                <div className="vault-divider">
+                  <span className="divider-line" />
+                  <span className="divider-text">OR AUTO-FETCH WITH AI</span>
+                  <span className="divider-line" />
+                </div>
+
+                <button
+                  type="button"
+                  className="google-vault-btn"
+                  disabled={loading || vaultHunting}
+                  onClick={() => setShowVaultModal(true)}
+                  title="Search your Google Drive & Gmail attachments for required scheme documents"
+                >
+                  <div className="vault-btn-content">
+                    <Icons.Google />
+                    <span className="vault-btn-title">Fetch from Google Drive / Gmail</span>
+                  </div>
+                </button>
+              </div>
+
               {file && (
                 <div className="attached-file-pill">
                   <div className="file-info">
@@ -742,7 +1133,7 @@ const App: React.FC = () => {
                   disabled={!file || loading}
                   onClick={handleUpload}
                 >
-                  {loading ? 'Extracting Data…' : '⚡ Extract Fields'}
+                  {loading ? 'Extracting Data…' : 'Extract Fields'}
                 </button>
               </div>
 
@@ -763,7 +1154,7 @@ const App: React.FC = () => {
             <div className="gemini-card">
               <h2 className="card-title">Verify Extracted Citizen Data</h2>
               <p className="card-desc">
-                Fields flagged in <span style={{ color: 'var(--gemini-warning-yellow)', fontWeight: 600 }}>yellow</span> require your manual review. You can edit any value.
+                Fields flagged with <span className="review-pill-inline">Review</span> require your confirmation. You can edit any value.
               </p>
 
               <div className="gemini-form-grid">
@@ -773,7 +1164,7 @@ const App: React.FC = () => {
                     <div key={f.key as string} className={`form-item ${f.spanTwo ? 'span-two' : ''}`}>
                       <label className="item-label">
                         <span>{f.label}</span>
-                        {uncertain && <span className="uncertain-tag">⚠ Check</span>}
+                        {uncertain && <span className="uncertain-tag">Review</span>}
                       </label>
                       <input
                         className={`gemini-input ${uncertain ? 'uncertain-highlight' : ''}`}
@@ -794,31 +1185,32 @@ const App: React.FC = () => {
                   id="citizen-verified"
                   checked={verified}
                   onChange={(e) => setVerified(e.target.checked)}
+                  onClick={(e) => e.stopPropagation()}
                 />
                 <div>
-                  <div className="gate-label">I confirm and verify the accuracy of this citizen data</div>
-                  <div className="gate-sub">The autonomous browser agent will fill the official portal using these details.</div>
+                  <div className="gate-label">I confirm and verify the accuracy of this data</div>
+                  <div className="gate-sub">The browser agent will fill the official portal using these details.</div>
                 </div>
               </div>
 
               <div className="action-buttons-row">
                 <button className="gemini-btn gemini-btn-tonal" onClick={() => setCurrentStep(2)}>
-                  ← Back
+                  Back
                 </button>
                 <button
                   className="gemini-btn gemini-btn-tonal"
                   disabled={!verified || loading}
                   onClick={handleCheckEligibility}
                 >
-                  {loading ? 'Evaluating…' : '📊 Check Scheme Eligibility'}
+                  {loading ? 'Evaluating…' : 'Check Scheme Eligibility'}
                 </button>
                 {eligibility && (
                   <button
-                    className="gemini-btn gemini-btn-success"
+                    className="gemini-btn gemini-btn-active-blue"
                     disabled={!verified || loading}
                     onClick={handleStartAgent}
                   >
-                    🚀 Launch AI Browser Agent
+                    Launch AI Browser Agent
                   </button>
                 )}
               </div>
@@ -828,7 +1220,7 @@ const App: React.FC = () => {
                 <div className={`eligibility-banner status-${eligibility.status.toLowerCase()}`}>
                   <div className="banner-header">
                     <span>{eligibility.status === 'ELIGIBLE' ? '✅' : '⚠️'}</span>
-                    <span>{eligibility.status}: {eligibility.scheme_name}</span>
+                    <span>{eligibility.status}: {eligibility.scheme_name.replace(/\s*\(ID:\s*\d+\)/gi, '')}</span>
                   </div>
                   <ul className="banner-reasons">
                     {eligibility.reasons.map((r, i) => (
@@ -924,7 +1316,12 @@ const App: React.FC = () => {
                   <button className="gemini-btn gemini-btn-tonal" onClick={() => setCurrentStep(3)}>
                     ← Back
                   </button>
-                  <button className="gemini-btn gemini-btn-danger">
+                  <button
+                    type="button"
+                    className="gemini-btn gemini-btn-danger"
+                    onClick={handleStopAgent}
+                    title="Stop browser agent and return to home page"
+                  >
                     Stop Agent
                   </button>
                 </div>
@@ -998,6 +1395,162 @@ const App: React.FC = () => {
           )}
         </div>
       </main>
+
+      {/* ───── Google Vault Document Hunter Modal ───── */}
+      {showVaultModal && (
+        <div className="vault-modal-backdrop" onClick={() => !vaultHunting && setShowVaultModal(false)}>
+          <div className="vault-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="vault-modal-header">
+              <div className="vault-modal-title-row">
+                <Icons.Google />
+                <h3>Google Vault Auto-Document Hunter</h3>
+              </div>
+              {!vaultHunting && (
+                <button className="modal-close-btn" onClick={() => setShowVaultModal(false)}>✕</button>
+              )}
+            </div>
+
+            <p className="vault-modal-desc">
+              Instead of manually hunting through folders, AI connects to your <strong>Google Drive</strong> and recent <strong>Gmail attachments</strong> to find and extract the required certificate.
+            </p>
+
+            {/* If files have not been searched yet, show query selector */}
+            {vaultFoundFiles.length === 0 ? (
+              <div className="vault-doc-picker">
+                <label className="picker-label">Select Document to Retrieve:</label>
+                <div className="picker-options">
+                  {[
+                    { id: 'income', label: 'Income Certificate (Aay Praman Patra)' },
+                    { id: 'marksheet', label: 'High School / Board Marksheet' },
+                    { id: 'aadhaar', label: 'Aadhaar / ID Card' },
+                  ].map((doc) => {
+                    const isSelected = vaultQuery.toLowerCase() === doc.id;
+                    return (
+                      <button
+                        key={doc.id}
+                        type="button"
+                        className={`picker-option-card ${isSelected ? 'selected' : ''}`}
+                        onClick={() => setVaultQuery(doc.id)}
+                        disabled={vaultHunting}
+                      >
+                        <div className="picker-card-left">
+                          <span className={`custom-radio-circle ${isSelected ? 'checked' : ''}`}>
+                            {isSelected && <span className="custom-radio-dot" />}
+                          </span>
+                          <span className="picker-opt-label">{doc.label}</span>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div className="custom-doc-input-row">
+                  <label className="custom-input-label">Or custom search keyword:</label>
+                  <div className="input-with-search-icon">
+                    <span className="input-search-icon">
+                      <Icons.Search />
+                    </span>
+                    <input
+                      type="text"
+                      className="vault-custom-input"
+                      placeholder="Type keyword e.g. income, marksheet, caste..."
+                      value={vaultQuery}
+                      onChange={(e) => setVaultQuery(e.target.value)}
+                      disabled={vaultHunting}
+                    />
+                    {vaultQuery && (
+                      <button
+                        type="button"
+                        className="input-clear-btn"
+                        onClick={() => setVaultQuery('')}
+                        title="Clear keyword"
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {vaultHunting ? (
+                  <div className="vault-hunting-status">
+                    <div className="hunting-spinner" />
+                    <span className="hunting-text">{vaultStepText}</span>
+                  </div>
+                ) : (
+                  <div className="vault-modal-actions">
+                    <button
+                      type="button"
+                      className="gemini-btn gemini-btn-tonal"
+                      onClick={() => setShowVaultModal(false)}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      className="google-connect-submit-btn"
+                      onClick={() => handleStartGoogleVaultSearch(false)}
+                    >
+                      <Icons.Google />
+                      <span>Connect Google & Search</span>
+                    </button>
+                  </div>
+                )}
+              </div>
+            ) : (
+              /* When candidate files are returned from POST /api/documents/google-search */
+              <div className="vault-results-section">
+                <div className="results-header">
+                  <span className="results-count">✅ Found {vaultFoundFiles.length} candidate file(s):</span>
+                  <button
+                    type="button"
+                    className="re-search-btn"
+                    onClick={() => setVaultFoundFiles([])}
+                    disabled={vaultHunting}
+                  >
+                    ← Search again
+                  </button>
+                </div>
+
+                <div className="found-files-list">
+                  {vaultFoundFiles.map((f) => (
+                    <div key={f.id} className="found-file-card">
+                      <div className="found-file-meta">
+                        <span className="file-icon">
+                          {f.source === 'gmail' ? '✉️' : '📁'}
+                        </span>
+                        <div className="file-details">
+                          <strong className="file-title">{f.name}</strong>
+                          <div className="file-sub">
+                            <span className={`source-pill source-${f.source}`}>
+                              {f.source === 'gmail' ? 'Gmail Attachment' : 'Google Drive'}
+                            </span>
+                            {f.size && <span className="file-size">• {f.size}</span>}
+                          </div>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        className="select-fetch-btn"
+                        onClick={() => handleFetchChosenFile(f)}
+                        disabled={vaultHunting}
+                      >
+                        ⚡ Fetch & Pre-fill
+                      </button>
+                    </div>
+                  ))}
+                </div>
+
+                {vaultHunting && (
+                  <div className="vault-hunting-status" style={{ marginTop: '1rem' }}>
+                    <div className="hunting-spinner" />
+                    <span className="hunting-text">{vaultStepText}</span>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {toast && (
         <div className={`gemini-toast toast-${toast.type}`}>

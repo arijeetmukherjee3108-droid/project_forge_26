@@ -5,6 +5,10 @@ import {
   ExtractionResponse,
   EligibilityResponse,
   ResumeRequest,
+  GoogleSearchRequest,
+  GoogleVaultFile,
+  GoogleFetchRequest,
+  GoogleFetchResponse,
 } from './types';
 
 // Base URL of the FastAPI server – change if you run it on a different host/port.
@@ -40,12 +44,42 @@ export const checkEligibility = async (
 };
 
 /**
- * Launch the live Playwright agent – only used after Milestone A is verified.
+ * Launch the live Playwright agent – only used after Milestone A is verified.
  */
 export const startApplication = async (
   profile: ApplicantProfile
 ): Promise<any> => {
   const resp = await axios.post(`${BASE_URL}/api/apply/start`, profile);
+  return resp.data;
+};
+
+/**
+ * Call 1: Search citizen's Google Drive & Gmail for matching documents.
+ * POST /api/documents/google-search
+ */
+export const searchGoogleVault = async (
+  payload: GoogleSearchRequest
+): Promise<GoogleVaultFile[]> => {
+  const resp = await axios.post<any>(
+    `${BASE_URL}/api/documents/google-search`,
+    payload
+  );
+  if (Array.isArray(resp.data)) return resp.data;
+  if (Array.isArray(resp.data?.files)) return resp.data.files;
+  return [];
+};
+
+/**
+ * Call 2: Download the selected file, save to backend uploads, and return CitizenProfile.
+ * POST /api/documents/google-fetch
+ */
+export const fetchGoogleVaultFile = async (
+  payload: GoogleFetchRequest
+): Promise<GoogleFetchResponse> => {
+  const resp = await axios.post<GoogleFetchResponse>(
+    `${BASE_URL}/api/documents/google-fetch`,
+    payload
+  );
   return resp.data;
 };
 

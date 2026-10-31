@@ -61,3 +61,35 @@ export interface ResumeRequest {
   otp_text?: string;
   action: 'FILL_ONLY' | 'SUBMIT' | 'CLOSE';
 }
+
+/** Google Vault (Drive + Gmail) Auto-Document Hunter */
+export interface GoogleVaultFile {
+  id: string;
+  name: string;
+  source: 'drive' | 'gmail';
+  mimeType?: string;
+  size?: string;
+}
+
+export interface GoogleSearchRequest {
+  access_token: string;
+  query: string;
+  demo_mode?: boolean;
+}
+
+export interface GoogleFetchRequest {
+  access_token: string;
+  file_id: string;
+  source: 'drive' | 'gmail';
+  demo_mode?: boolean;
+}
+
+export interface GoogleFetchResponse {
+  profile?: ApplicantProfile;
+  extracted_profile?: ApplicantProfile;
+  uncertain_fields?: string[];
+  raw_text_preview?: string;
+  message?: string;
+  file_name?: string;
+  file_path?: string;
+}
