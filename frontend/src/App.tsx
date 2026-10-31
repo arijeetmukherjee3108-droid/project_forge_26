@@ -152,21 +152,21 @@ const Icons = {
 // Mock data so the UI is 100% testable without backend
 // ──────────────────────────────────────────────
 const MOCK_EXTRACTION: ExtractionResponse = {
-  extracted_profile: {
+  profile: {
     full_name: 'Aarav Verma',
-    father_name: 'Rajesh Verma',
+    father_or_guardian_name: 'Rajesh Verma',
     date_of_birth: '15/08/2005',
     gender: 'Male',
-    mobile: '9876543210',
+    mobile_number: '9876543210',
     email: 'aarav@example.com',
     state: 'Uttar Pradesh',
     district: 'Lucknow',
-    pin_code: '226001',
+    pincode: '226001',
     address_line: '123 Hazratganj, Lucknow',
-    annual_family_income: 180000,
+    annual_income: 180000,
     category: 'General',
   },
-  uncertain_fields: ['annual_family_income', 'email'],
+  uncertain_fields: ['annual_income', 'email'],
   raw_text_preview:
     'UTTAR PRADESH HIGHER EDUCATION SCHOLARSHIP VERIFICATION SHEET\n' +
     '------------------------------------------------------------\n' +
@@ -190,7 +190,7 @@ const MOCK_ELIGIBILITY: EligibilityResponse = {
   required_documents: ['Income Certificate', 'Aadhaar / ID Card'],
 };
 
-const USE_MOCK = true; // ← Set to false when connecting to local FastAPI backend
+const USE_MOCK = false; // ← Set to false when connecting to local FastAPI backend
 
 const GOOGLE_CLIENT_ID =
   '434733256139-amj4gkvbl66f2pc7vok2762u0m5p0es0.apps.googleusercontent.com';
@@ -295,16 +295,16 @@ interface FieldMeta {
 
 const FORM_FIELDS: FieldMeta[] = [
   { key: 'full_name', label: 'Full Name' },
-  { key: 'father_name', label: "Father / Guardian's Name" },
+  { key: 'father_or_guardian_name', label: "Father / Guardian's Name" },
   { key: 'date_of_birth', label: 'Date of Birth (DD/MM/YYYY)' },
   { key: 'gender', label: 'Gender' },
-  { key: 'mobile', label: 'Mobile Number' },
+  { key: 'mobile_number', label: 'Mobile Number' },
   { key: 'email', label: 'Email Address' },
   { key: 'state', label: 'State' },
   { key: 'district', label: 'District' },
-  { key: 'pin_code', label: 'Pin Code' },
+  { key: 'pincode', label: 'Pin Code' },
   { key: 'address_line', label: 'Full Residential Address', spanTwo: true },
-  { key: 'annual_family_income', label: 'Annual Family Income (₹)', type: 'number' },
+  { key: 'annual_income', label: 'Annual Family Income (₹)', type: 'number' },
   { key: 'category', label: 'Category' },
 ];
 
@@ -462,7 +462,7 @@ const App: React.FC = () => {
     if (USE_MOCK) {
       await new Promise((r) => setTimeout(r, 1000));
       setExtraction(MOCK_EXTRACTION);
-      setProfile(MOCK_EXTRACTION.extracted_profile);
+      setProfile(MOCK_EXTRACTION.profile);
       setUncertainFields(MOCK_EXTRACTION.uncertain_fields);
       showToast('Document parsed with AI extraction!', 'success');
       setCurrentStep(3);
@@ -473,7 +473,7 @@ const App: React.FC = () => {
     try {
       const resp = await extractDocument(file);
       setExtraction(resp);
-      setProfile(resp.extracted_profile);
+      setProfile(resp.profile);
       setUncertainFields(resp.uncertain_fields);
       showToast(resp.message, 'success');
       setCurrentStep(3);
@@ -666,7 +666,7 @@ const App: React.FC = () => {
             source: chosenFile.source,
             demo_mode: false,
           });
-          profileResult = resp.profile || resp.extracted_profile || null;
+          profileResult = resp.profile ?? null;
           uncertain = resp.uncertain_fields || [];
           rawText = resp.raw_text_preview || '';
         } catch {
@@ -683,7 +683,7 @@ const App: React.FC = () => {
             source: chosenFile.source,
             demo_mode: true,
           });
-          profileResult = resp.profile || resp.extracted_profile || null;
+          profileResult = resp.profile ?? null;
           uncertain = resp.uncertain_fields || [];
           rawText = resp.raw_text_preview || '';
         } catch {
@@ -694,7 +694,7 @@ const App: React.FC = () => {
       // 4. Default mock data if backend extractor hasn't processed
       if (!profileResult) {
         await new Promise((r) => setTimeout(r, 650));
-        profileResult = MOCK_EXTRACTION.extracted_profile;
+        profileResult = MOCK_EXTRACTION.profile;
         uncertain = MOCK_EXTRACTION.uncertain_fields;
         rawText = MOCK_EXTRACTION.raw_text_preview;
       }
@@ -706,7 +706,7 @@ const App: React.FC = () => {
 
       setFile(finalFile);
       setExtraction({
-        extracted_profile: profileResult!,
+        profile: profileResult!,
         uncertain_fields: uncertain,
         raw_text_preview: rawText,
         message: `Retrieved "${chosenFile.name}" from Google Vault!`,
@@ -783,11 +783,12 @@ const App: React.FC = () => {
     }
     setLoading(true);
     try {
-      const resp = await startApplication({ ...profile, user_verified: true });
-      if (resp.action_log) setAgentLog(resp.action_log);
+      const docFilename = profile.source_documents?.find(f => f.startsWith('saved:'))?.replace('saved:', '');
+      const resp = await startApplication(profile, docFilename);
+      if (resp.log_steps) setAgentLog(resp.log_steps);
       if (resp.session_id) setSessionId(resp.session_id);
-      if (resp.page_screenshot_b64) setPageScreenshot(resp.page_screenshot_b64);
-      if (resp.captcha_screenshot_b64) setCaptchaScreenshot(resp.captcha_screenshot_b64);
+      if (resp.page_preview_b64) setPageScreenshot(resp.page_preview_b64);
+      if (resp.captcha_image_b64) setCaptchaScreenshot(resp.captcha_image_b64);
       setAgentDone(true);
       showToast(resp.message || 'Live agent launched.', 'success');
     } catch {
@@ -814,13 +815,14 @@ const App: React.FC = () => {
 
     setLoading(true);
     try {
-      const resp = await resumeApplication({
-        session_id: sessionId,
-        captcha_text: captchaText,
-        action,
-      });
-      if (resp.page_screenshot_b64) setPageScreenshot(resp.page_screenshot_b64);
-      if (resp.status === 'SUBMITTED_OR_NEXT_STEP') setSubmitted(true);
+      const resp = await resumeApplication(sessionId, captchaText, action === 'SUBMIT');
+      if (resp.final_screenshot_b64) setPageScreenshot(resp.final_screenshot_b64);
+      if (resp.status === 'submitted') {
+        setSubmitted(true);
+        if (resp.tracking_receipt) {
+          setAgentLog((prev) => [...prev, `🎉 [SUCCESS] Tracking Receipt: ${resp.tracking_receipt}`]);
+        }
+      }
       showToast(resp.message || 'Action executed.', 'success');
     } catch {
       showToast('Resume action failed.', 'error');
@@ -833,7 +835,7 @@ const App: React.FC = () => {
     setAgentRunning(false);
     if (!USE_MOCK && sessionId) {
       try {
-        await resumeApplication({ session_id: sessionId, action: 'CLOSE' });
+        await resumeApplication(sessionId, '', false);
       } catch {
         // ignore error if session already closed
       }

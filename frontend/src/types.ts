@@ -1,95 +1,137 @@
 // src/types.ts
+// ── Single source of truth mirroring backend/app/schemas.py ──────────────────
+// IMPORTANT: field names MUST stay 1-to-1 with CitizenProfile in schemas.py
 
 /**
- * Universal applicant profile used across all government forms.
- * The fields cover the superset of data most portals require.
+ * Mirrors CitizenProfile in backend/app/schemas.py
  */
 export interface ApplicantProfile {
-  // Personal details
+  // Personal identification
   full_name?: string;
-  first_name?: string;
-  last_name?: string;
-  father_name?: string;
-  date_of_birth?: string; // DD/MM/YYYY
-  gender?: string;
+  father_or_guardian_name?: string;
+  date_of_birth?: string;           // ISO-8601: YYYY-MM-DD
+  gender?: string;                  // 'male' | 'female' | 'other'
 
-  // Contact details
-  mobile?: string;
+  // Contact
+  mobile_number?: string;           // 10-digit, digits only
   email?: string;
 
-  // Address details
-  state?: string;
-  district?: string;
-  pin_code?: string;
+  // Identity
+  aadhaar_last4?: string;
+
+  // Address
   address_line?: string;
+  village_or_city?: string;
+  district?: string;
+  state?: string;
+  pincode?: string;                 // 6-digit
 
-  // Socio‑economic details (optional for many schemes)
-  annual_family_income?: number;
-  category?: string; // e.g., General, OBC, SC, ST
+  // Socioeconomic
+  occupation?: string;
+  annual_income?: number;           // INR, >= 0
+  category?: string;                // 'general' | 'obc' | 'sc' | 'st' | 'ews'
 
-  // Uploaded document path – the agent will re‑attach this file
-  uploaded_doc_path?: string;
-
-  // Intent – which portal / service the user wants to use
-  target_intent?: string; // free‑text or a short id (e.g., "serviceonline:directApply")
-
-  // Verification flag – required before launching the browser agent
-  user_verified?: boolean;
+  // Metadata
+  source_documents?: string[];
 }
 
-/** Response from the document‑extraction endpoint */
+/**
+ * Mirrors ExtractResponse in backend/app/schemas.py
+ * Returned by POST /api/documents/extract and POST /api/documents/google-fetch
+ */
 export interface ExtractionResponse {
-  extracted_profile: ApplicantProfile;
-  uncertain_fields: string[]; // names of fields that need human review
-  raw_text_preview: string; // a short snippet of the raw PDF text
+  profile: ApplicantProfile;        // was extracted_profile — now matches backend
+  uncertain_fields: string[];
+  raw_text_preview: string;
   message: string;
 }
 
-/** Response from the eligibility‑checking endpoint */
+/**
+ * Mirrors EligibilityResponse in backend/app/schemas.py
+ * Returned by POST /api/eligibility
+ */
 export interface EligibilityResponse {
   status: 'ELIGIBLE' | 'INELIGIBLE' | 'MISSING_INFO';
-  scheme_name?: string; // name of the scheme if applicable
-  reasons: string[]; // why eligible / why not
-  missing_fields?: string[]; // fields that still need input
-  required_documents?: string[]; // any extra docs the portal asks for
+  scheme_name?: string;
+  reasons: string[];
+  missing_fields?: string[];
+  required_documents?: string[];
 }
 
-/** Payload sent when the user resumes after the CAPTCHA checkpoint */
+/**
+ * Mirrors ApplyStartResponse in backend/app/schemas.py
+ * Returned by POST /api/apply/start
+ */
+export interface ApplyStartResponse {
+  session_id: string;
+  status: 'running' | 'awaiting_captcha' | 'submitted' | 'failed';
+  message: string;
+  captcha_image_b64?: string;
+  page_preview_b64?: string;
+  log_steps?: string[];
+}
+
+/**
+ * Mirrors ApplyResumeResponse in backend/app/schemas.py
+ * Returned by POST /api/apply/resume
+ */
+export interface ApplyResumeResponse {
+  session_id: string;
+  status: 'running' | 'awaiting_captcha' | 'submitted' | 'failed';
+  message: string;
+  tracking_receipt?: string;
+  final_screenshot_b64?: string;
+}
+
+/**
+ * Mirrors ResumeRequest (used internally by App.tsx for CAPTCHA step)
+ */
 export interface ResumeRequest {
   session_id: string;
   captcha_text?: string;
-  otp_text?: string;
-  action: 'FILL_ONLY' | 'SUBMIT' | 'CLOSE';
+  approve: boolean;
 }
 
-/** Google Vault (Drive + Gmail) Auto-Document Hunter */
+// ── Google Vault (Drive + Gmail) ──────────────────────────────────────────────
+
+/**
+ * Mirrors VaultCandidate in backend/app/schemas.py
+ * One file found in Google Drive or Gmail
+ */
 export interface GoogleVaultFile {
   id: string;
   name: string;
-  source: 'drive' | 'gmail';
-  mimeType?: string;
+  source: string;                   // 'Google Drive' | 'Gmail'
+  mime_type?: string;
+  size_kb?: number;
+  modified_date?: string;
+  // Legacy frontend-only compat field (used in file-card display)
   size?: string;
 }
 
+/**
+ * Request body for POST /api/documents/google-search
+ */
 export interface GoogleSearchRequest {
-  access_token: string;
+  access_token?: string;
   query: string;
   demo_mode?: boolean;
 }
 
-export interface GoogleFetchRequest {
-  access_token: string;
-  file_id: string;
-  source: 'drive' | 'gmail';
-  demo_mode?: boolean;
+/**
+ * Response from POST /api/documents/google-search
+ */
+export interface GoogleSearchResponse {
+  query: string;
+  candidates: GoogleVaultFile[];
 }
 
-export interface GoogleFetchResponse {
-  profile?: ApplicantProfile;
-  extracted_profile?: ApplicantProfile;
-  uncertain_fields?: string[];
-  raw_text_preview?: string;
-  message?: string;
-  file_name?: string;
-  file_path?: string;
+/**
+ * Request body for POST /api/documents/google-fetch
+ */
+export interface GoogleFetchRequest {
+  access_token?: string;
+  file_id: string;
+  source: string;
+  demo_mode?: boolean;
 }
