@@ -1812,7 +1812,7 @@ select.gemini-input option {
   width: 100%;
 }
 
-@media (max-width: 950px) {
+@media (max-width: 1280px) {
   .split-dashboard {
     grid-template-columns: 1fr;
   }

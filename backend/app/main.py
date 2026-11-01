@@ -36,7 +36,13 @@ from fastapi.responses import FileResponse
 
 try:
     from app import extractor, eligibility
-    from app.browser_agent import start_application, resume_application
+    from app.browser_agent import (
+        start_application,
+        resume_application,
+        navigate_digilocker_apaar,
+        autofill_digilocker_apaar,
+        get_browser_session_status,
+    )
     from app.ai_form_agent import scan_portal_url
     from app.google_vault import search_google_vault, fetch_google_vault_file
     from app.schemas import (
@@ -55,10 +61,18 @@ try:
         IntentClassifyResponse,
         DynamicScanRequest,
         DynamicScanResponse,
+        DigiLockerNavigateRequest,
+        DigiLockerAutofillRequest,
     )
 except ImportError:
     from backend.app import extractor, eligibility
-    from backend.app.browser_agent import start_application, resume_application
+    from backend.app.browser_agent import (
+        start_application,
+        resume_application,
+        navigate_digilocker_apaar,
+        autofill_digilocker_apaar,
+        get_browser_session_status,
+    )
     from backend.app.ai_form_agent import scan_portal_url
     from backend.app.google_vault import search_google_vault, fetch_google_vault_file
     from backend.app.schemas import (
@@ -77,6 +91,8 @@ except ImportError:
         IntentClassifyResponse,
         DynamicScanRequest,
         DynamicScanResponse,
+        DigiLockerNavigateRequest,
+        DigiLockerAutofillRequest,
     )
 
 # ---------------------------------------------------------------------------
@@ -292,6 +308,47 @@ async def apply_resume(body: ApplyResumeRequest) -> ApplyResumeResponse:
         approve=body.approve,
         submit_final=body.submit_final,
     )
+
+
+@app.post(
+    "/api/apply/digilocker-navigate",
+    response_model=ApplyStartResponse,
+    tags=["apply"],
+    summary="Deep-navigate to APAAR ID form post-login and fill initial dropdowns",
+)
+async def digilocker_navigate(body: DigiLockerNavigateRequest) -> ApplyStartResponse:
+    """
+    Executes autonomous navigation to APAAR form on DigiLocker post-login,
+    opens dropdowns, fills initial identity options, and halts at Institution/Board checkpoint.
+    """
+    return await navigate_digilocker_apaar(session_id=body.session_id)
+
+
+@app.post(
+    "/api/apply/digilocker-autofill",
+    response_model=ApplyResumeResponse,
+    tags=["apply"],
+    summary="Resume APAAR autofill after Human-in-the-Loop Institution/Board selection",
+)
+async def digilocker_autofill(body: DigiLockerAutofillRequest) -> ApplyResumeResponse:
+    """
+    Resumes after Human-in-the-Loop selection, checks consent, highlights 'Get Document',
+    and halts right before final submit for sovereign citizen review.
+    """
+    return await autofill_digilocker_apaar(
+        session_id=body.session_id,
+        selected_board=body.selected_board,
+    )
+
+
+@app.get(
+    "/api/apply/session-status/{session_id}",
+    tags=["apply"],
+    summary="Get current browser URL and authentication state",
+)
+async def get_session_status_endpoint(session_id: str) -> dict:
+    """Returns active session state, current URL, and completed steps."""
+    return await get_browser_session_status(session_id=session_id)
 
 
 @app.post(

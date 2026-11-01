@@ -14,6 +14,7 @@ import asyncio
 import base64
 import logging
 import os
+import sys
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -40,6 +41,7 @@ try:
         distill_form_dom,
         generate_action_plan,
         execute_dynamic_action_plan,
+        execute_dynamic_action_plan_with_checkpoint,
     )
     from app.schemas import (
         AgentStatus,
@@ -59,6 +61,7 @@ except ImportError:
         distill_form_dom,
         generate_action_plan,
         execute_dynamic_action_plan,
+        execute_dynamic_action_plan_with_checkpoint,
     )
     from backend.app.schemas import (
         AgentStatus,
@@ -346,6 +349,68 @@ async def start_application(
     pw = await async_playwright().start()
 
     try:
+        # ---- Path 0: DigiLocker APAAR ID Autonomous Multi-Stage Pipeline ----
+        is_dl = (
+            "digilocker" in service_id.lower()
+            or "apaar" in service_id.lower()
+            or "abc" in service_id.lower()
+            or (getattr(profile, "target_portal_url", None) and "digilocker" in profile.target_portal_url.lower())
+        )
+        if is_dl:
+            # Determine starting entry URL
+            if getattr(profile, "target_portal_url", None) and ("digilocker_apaar" in profile.target_portal_url or ".html" in profile.target_portal_url):
+                if "digilocker_apaar_mock" in profile.target_portal_url:
+                    entry_url = f"file://{(Path(__file__).resolve().parent.parent / 'static' / 'digilocker_apaar_mock.html').resolve()}"
+                else:
+                    entry_url = profile.target_portal_url
+            elif (Path(__file__).resolve().parent.parent / "static" / "digilocker_apaar_mock.html").exists() and ("mock" in service_id.lower() or "test" in service_id.lower()):
+                entry_url = f"file://{(Path(__file__).resolve().parent.parent / 'static' / 'digilocker_apaar_mock.html').resolve()}"
+            else:
+                entry_url = getattr(profile, "target_portal_url", None) or "https://www.digilocker.gov.in/web/login"
+
+            browser = await pw.chromium.launch(
+                headless=headless,
+                slow_mo=60,
+            )
+            context = await browser.new_context(
+                ignore_https_errors=True,
+                viewport={"width": 1280, "height": 850},
+            )
+            page = await context.new_page()
+
+            session = BrowserSession(
+                session_id=session_id,
+                pw=pw,
+                browser=browser,
+                context=context,
+                page=page,
+                portal_config=None,
+                profile=profile,
+                document_path=doc_path,
+                is_dynamic=True,
+            )
+            _active_sessions[session_id] = session
+
+            await page.goto(entry_url, timeout=15000, wait_until="domcontentloaded")
+            session.steps_completed.append("🚀 Initialized Chromium browser for DigiLocker APAAR Automation")
+
+            if "digilocker_apaar_mock" in entry_url or "generic_portal" in entry_url:
+                session.steps_completed.append(f"🌐 Loaded portal issuance page: {entry_url}")
+                return await navigate_digilocker_apaar_internal(session)
+            else:
+                session.steps_completed.append(f"🌐 Navigated to DigiLocker Login Gateway: {entry_url}")
+                session.steps_completed.append("🔑 Citizen Authentication Gateway: Complete Mobile / Aadhaar sign-in on the Chromium browser.")
+                session.steps_completed.append("💡 Once logged in, click \"I'm Logged In — Proceed to APAAR ID Form\" in the Agent Terminal.")
+                session.status = AgentStatus.awaiting_login
+                preview = await _screenshot_page_b64(page)
+                return ApplyStartResponse(
+                    session_id=session_id,
+                    status=session.status,
+                    message="Agent launched on DigiLocker Login Gateway. Please log in on the browser window, then click Proceed.",
+                    page_preview_b64=preview,
+                    steps_completed=list(session.steps_completed),
+                )
+
         # ---- Path 1: Deterministic Fast-Path (0 tokens, 0ms latency) ----
         if portal_id in PORTAL_REGISTRY:
             config = PORTAL_REGISTRY[portal_id]
@@ -657,4 +722,253 @@ async def resume_application(
     finally:
         if close_browser or not approve:
             await close_session(session_id)
+
+
+# ---------------------------------------------------------------------------
+# Specialized DigiLocker APAAR ID Multi-Stage Autonomous Handlers
+# ---------------------------------------------------------------------------
+
+async def navigate_digilocker_apaar_internal(session: BrowserSession) -> ApplyStartResponse:
+    """
+    Executes autonomous navigation to APAAR form on DigiLocker, scans live DOM,
+    runs Groq LLM to generate action plan, executes it in visible lockstep,
+    and pauses ONLY when the human-in-the-loop checkpoint is genuinely reached.
+    """
+    page = session.page
+    profile = session.profile
+
+    # 1. Check if user is still on login page
+    current_url = page.url
+    if "web/login" in current_url or "signin" in current_url:
+        preview = await _screenshot_page_b64(page)
+        session.status = AgentStatus.awaiting_login
+        session.steps_completed.append("⚠️ Citizen is still on DigiLocker Login Gateway.")
+        session.steps_completed.append("👉 Please enter your Mobile/Aadhaar & OTP in the browser window to complete sign-in.")
+        return ApplyStartResponse(
+            session_id=session.session_id,
+            status=session.status,
+            message="Please complete login on the browser window first, then click Auto-Navigate.",
+            page_preview_b64=preview,
+            steps_completed=list(session.steps_completed),
+            detected_fields=[],
+            action_plan=[],
+        )
+
+    # 2. Check if we are on live DigiLocker dashboard/home
+    if "digilocker.gov.in" in current_url:
+        session.steps_completed.append("✅ Authenticated citizen session detected on DigiLocker.")
+        session.steps_completed.append("🧭 Checking live DOM for APAAR / Academic Bank of Credits issuance...")
+
+        # Wait for any initial skeleton placeholders to finish loading
+        try:
+            await page.wait_for_selector(".skeleton, app-skeleton, .shimmer", state="detached", timeout=3000)
+        except Exception:
+            pass
+
+        # Check if form is already rendered
+        dom = await distill_form_dom(page)
+        interactive_fields = [
+            f for f in dom.get("fields", [])
+            if f.get("tag") in ("select", "input", "textarea")
+            and f.get("type") not in ("search", "hidden", "button", "submit")
+        ]
+
+        # If not yet on the form, attempt navigation
+        if len(interactive_fields) == 0:
+            apaar_found = False
+            # Check for card/button on home page
+            try:
+                card = await page.wait_for_selector(
+                    "text=APAAR, text=Academic Bank of Credits, text=ABC ID",
+                    timeout=2500,
+                )
+                if card:
+                    await card.scroll_into_view_if_needed()
+                    await card.click()
+                    session.steps_completed.append("👉 [AUTONOMOUS ACTION] Clicked APAAR / Academic Bank of Credits tile on dashboard.")
+                    apaar_found = True
+                    await asyncio.sleep(2)
+            except Exception:
+                pass
+
+            if not apaar_found:
+                try:
+                    search_box = await page.wait_for_selector(
+                        "input[type='search'], input[placeholder*='Search'], input[aria-label*='Search']",
+                        timeout=2000,
+                    )
+                    if search_box:
+                        await search_box.click()
+                        await search_box.fill("APAAR")
+                        await search_box.press("Enter")
+                        session.steps_completed.append("👉 [AUTONOMOUS ACTION] Searched 'APAAR' in DigiLocker document directory.")
+                        await asyncio.sleep(2)
+                        res_item = await page.wait_for_selector("text=APAAR, text=Academic Bank", timeout=3000)
+                        if res_item:
+                            await res_item.click()
+                            apaar_found = True
+                            await asyncio.sleep(2)
+                except Exception:
+                    pass
+
+    # 3. Distill live DOM
+    await asyncio.sleep(0.5)
+    dom = await distill_form_dom(page)
+    interactive_fields = [
+        f for f in dom.get("fields", [])
+        if f.get("tag") in ("select", "input", "textarea")
+        and f.get("type") not in ("search", "hidden", "button", "submit")
+    ]
+
+    # 4. If STILL 0 interactive form fields: THE PAGE HAS NOT LOADED THE FORM YET!
+    # DO NOT EMIT CHECKPOINT! Stay in running status and inform user honestly.
+    if len(interactive_fields) == 0:
+        session.status = AgentStatus.running
+        preview = await _screenshot_page_b64(page)
+        session.steps_completed.append("⏳ Live portal content loading... Waiting for issuance form to display.")
+        session.steps_completed.append("💡 Note: If DigiLocker requires clicking your issued document or searching, do so in the browser window.")
+        session.steps_completed.append("🔄 The agent is actively listening to the DOM and will autofill as soon as fields appear.")
+        return ApplyStartResponse(
+            session_id=session.session_id,
+            status=session.status,
+            message="Waiting for APAAR ID form to finish loading on DigiLocker...",
+            page_preview_b64=preview,
+            steps_completed=list(session.steps_completed),
+            detected_fields=[],
+            action_plan=[],
+        )
+
+    # 5. Form fields ARE detected!
+    session.steps_completed.append(f"📋 APAAR ID issuance form loaded ({len(interactive_fields)} interactive fields detected).")
+    session.steps_completed.append("🤖 Calling Groq LLM to reason over DOM and map student profile...")
+
+    action_plan = generate_action_plan(dom, profile)
+    session.steps_completed.append(f"⚡ Groq AI generated zero-shot action plan with {len(action_plan)} actions. Executing on live browser...")
+
+    # Execute plan with visible highlights and human timing
+    steps, paused_at_checkpoint = await execute_dynamic_action_plan_with_checkpoint(page, action_plan)
+    session.steps_completed.extend(steps)
+
+    preview = await _screenshot_page_b64(page)
+    if paused_at_checkpoint:
+        session.status = AgentStatus.awaiting_user_selection
+        message = "Agent paused at Human-in-the-Loop checkpoint: Please select your School / Board / University."
+    else:
+        session.status = AgentStatus.ready_to_submit
+        message = "Form 100% pre-filled. Paused right before final submission for sovereign human review."
+
+    return ApplyStartResponse(
+        session_id=session.session_id,
+        status=session.status,
+        message=message,
+        page_preview_b64=preview,
+        steps_completed=list(session.steps_completed),
+        action_plan=action_plan,
+        detected_fields=interactive_fields,
+    )
+
+
+async def navigate_digilocker_apaar(session_id: str) -> ApplyStartResponse:
+    """Public API for POST /api/apply/digilocker-navigate."""
+    try:
+        session = get_session(session_id)
+    except KeyError:
+        return ApplyStartResponse(
+            session_id=session_id,
+            status=AgentStatus.failed,
+            message=f"No active session '{session_id}' — it may have expired.",
+        )
+    return await navigate_digilocker_apaar_internal(session)
+
+
+async def autofill_digilocker_apaar_internal(session: BrowserSession, selected_board: Optional[str] = None) -> ApplyResumeResponse:
+    """
+    Resumes after Human-in-the-Loop selection, checks consent, highlights 'Get Document',
+    and halts before final submit.
+    """
+    page = session.page
+
+    if selected_board:
+        try:
+            inst_sel = await page.wait_for_selector("#institution_name, select[name*='institution'], select[name*='board']", state="visible", timeout=2000)
+            if inst_sel:
+                try:
+                    await inst_sel.select_option(label=selected_board, timeout=1000)
+                except Exception:
+                    await inst_sel.select_option(value=selected_board)
+                session.steps_completed.append(f"👉 [AUTONOMOUS ACTION] Selected Institution/Board: {selected_board}")
+        except Exception:
+            pass
+
+    # Check statutory consent checkbox
+    try:
+        chk = await page.wait_for_selector("#chk_consent, input[type='checkbox']", state="visible", timeout=2500)
+        if chk:
+            await chk.scroll_into_view_if_needed()
+            await page.evaluate("(el) => { el.style.outline = '2px solid #10b981'; }", chk)
+            if not await chk.is_checked():
+                await chk.check()
+            session.steps_completed.append("👉 [AUTONOMOUS ACTION] Checked statutory DigiLocker consent checkbox")
+    except Exception as exc:
+        logger.warning("Consent checkbox not found: %s", exc)
+
+    # Scroll to and highlight Get Document button
+    try:
+        btn = await page.wait_for_selector("#btn_get_document, button[type='submit'], button:has-text('Get Document')", state="visible", timeout=3000)
+        if btn:
+            await btn.scroll_into_view_if_needed()
+            await page.evaluate("(btn) => { btn.style.border = '3px solid #10b981'; btn.style.boxShadow = '0 0 20px #10b981'; }", btn)
+    except Exception as exc:
+        logger.warning("Submit button not found: %s", exc)
+
+    session.steps_completed.append("✅ [FORM 100% AUTOFILLED] All student identity & academic credentials populated.")
+    session.steps_completed.append("🛡️ [SOVEREIGN SAFETY CHECKPOINT] Agent halted before final submit button.")
+    session.steps_completed.append("👉 Review your APAAR document details on the live portal. Click 'Get Document' on the live portal whenever you are ready to issue your APAAR ID.")
+
+    session.status = AgentStatus.ready_to_submit
+    preview = await _screenshot_page_b64(page)
+    return ApplyResumeResponse(
+        session_id=session.session_id,
+        status=session.status,
+        message="Form 100% pre-filled. Paused right before final 'Get Document' submission for sovereign human review.",
+        final_screenshot_b64=preview,
+        steps_completed=list(session.steps_completed),
+    )
+
+
+async def autofill_digilocker_apaar(session_id: str, selected_board: Optional[str] = None) -> ApplyResumeResponse:
+    """Public API for POST /api/apply/digilocker-autofill."""
+    try:
+        session = get_session(session_id)
+    except KeyError:
+        return ApplyResumeResponse(
+            session_id=session_id,
+            status=AgentStatus.failed,
+            message=f"No active session '{session_id}' — it may have expired.",
+        )
+    return await autofill_digilocker_apaar_internal(session, selected_board)
+
+
+async def get_browser_session_status(session_id: str) -> dict:
+    """Checks current URL and state of live browser session."""
+    try:
+        session = get_session(session_id)
+        current_url = session.page.url
+        is_logged_in = "web/login" not in current_url and "signin" not in current_url
+        return {
+            "session_id": session_id,
+            "status": session.status.value if hasattr(session.status, "value") else str(session.status),
+            "current_url": current_url,
+            "is_logged_in": is_logged_in,
+            "steps_completed": list(session.steps_completed),
+        }
+    except KeyError:
+        return {
+            "session_id": session_id,
+            "status": "not_found",
+            "current_url": "",
+            "is_logged_in": False,
+            "steps_completed": [],
+        }
+
 

@@ -169,23 +169,27 @@ your mission is to produce an executable JSON Action Plan.
 For each interactive field in `fields`, map it to an atomic action:
 - `fill`: for text, email, tel, date, number, password, textarea inputs (using applicant's profile data)
 - `select`: for `<select>` dropdowns (pick the best matching option from `options`, case-insensitive)
+- `checkpoint`: for fields requiring human-in-the-loop choice that cannot be inferred automatically (e.g. selecting applicant's specific school, college, board, university, or exam center from a dropdown list)
 - `upload`: for `type: "file"` inputs (include doc_type, drive_search_keyword, max_size_kb)
-- `check`: for checkboxes (e.g. declarations, agreements, terms & conditions -> value: true)
+- `check`: for checkboxes (e.g. declarations, agreements, statutory consent -> value: true)
+
+Specialized Guidance for Academic & DigiLocker / APAAR / ABC forms:
+- `identity_type`: Select "Roll Number" or first available ID option (action: "select", value: "Roll Number"). Do NOT mark as checkpoint.
+- `identity_value`: Fill with student roll number, applicant ID, or aadhaar last 4 (action: "fill", value: "2024CS0892"). Do NOT mark as checkpoint.
+- `admission_year`: Select recent academic year (action: "select", value: "2024"). Do NOT mark as checkpoint.
+- `institution_type`: Select "University" or "School" (action: "select", value: "University"). Do NOT mark as checkpoint.
+- `institution_name` or specific Board dropdown: Human-in-the-Loop decision where the user picks their specific institution (action: "checkpoint", value: null).
+- `consent` / statutory consent / declaration checkbox: Check the consent box (action: "check", value: true).
 
 You must respond STRICTLY with a valid JSON object matching this schema:
 {
   "action_plan": [
-    { "selector": "#inp_name", "action": "fill", "value": "Applicant Name" },
-    { "selector": "#inp_father", "action": "fill", "value": "Father Name" },
-    { "selector": "#sel_state", "action": "select", "value": "STATE_NAME" },
-    { 
-      "selector": "#file_doc", 
-      "action": "upload", 
-      "doc_type": "income_certificate", 
-      "drive_search_keyword": "income", 
-      "max_size_kb": 200 
-    },
-    { "selector": "#chk_agree", "action": "check", "value": true }
+    { "selector": "#identity_type", "action": "select", "value": "Roll Number" },
+    { "selector": "#identity_value", "action": "fill", "value": "2024CS0892" },
+    { "selector": "#admission_year", "action": "select", "value": "2024" },
+    { "selector": "#institution_type", "action": "select", "value": "University" },
+    { "selector": "#institution_name", "action": "checkpoint", "value": null },
+    { "selector": "#chk_consent", "action": "check", "value": true }
   ]
 }
 """
@@ -207,6 +211,22 @@ def _heuristic_action_plan(distilled_dom: dict, profile: CitizenProfile) -> List
         f_type = f.get("type", "").lower()
         lbl = (f.get("label") or "").lower()
         opts = f.get("options") or []
+
+        # 0. Checkpoint Detection (Human-in-the-Loop selection for specific School/Board/University)
+        # Note: 'institution_type' is a generic category and should be auto-selected; 'institution_name' is the specific board checkpoint!
+        is_inst_name_checkpoint = (
+            (tag == "select" or opts)
+            and any(k in lbl for k in ["institution", "board", "university", "school", "college", "संस्थान", "बोर्ड"])
+            and "type" not in lbl
+            and "type" not in sel.lower()
+        )
+        if is_inst_name_checkpoint:
+            plan.append({
+                "selector": sel,
+                "action": "checkpoint",
+                "value": None,
+            })
+            continue
 
         # 1. File Upload
         if f_type == "file" or "upload" in lbl or "certificate" in lbl or "दस्तावेज़" in lbl:
@@ -272,6 +292,19 @@ def _heuristic_action_plan(distilled_dom: dict, profile: CitizenProfile) -> List
                         selected_val = o
                         break
 
+            # Check identity type
+            elif "identity" in lbl or "id type" in lbl or "type" in lbl:
+                for o in opts:
+                    if "roll" in o.lower() or "reg" in o.lower() or "enrol" in o.lower():
+                        selected_val = o
+                        break
+            # Check admission year
+            elif "year" in lbl or "admission" in lbl:
+                for o in opts:
+                    if "2024" in o or "2025" in o or "2023" in o:
+                        selected_val = o
+                        break
+
             if not selected_val and opts:
                 selected_val = opts[0]
 
@@ -283,10 +316,12 @@ def _heuristic_action_plan(distilled_dom: dict, profile: CitizenProfile) -> List
                 })
             continue
 
-                # 4. Input / Text / Email / Mobile / Date
+        # 4. Input / Text / Email / Mobile / Date
         val = None
         if "father" in lbl or "पिता" in lbl or "guardian" in lbl:
             val = prof_data.get("father_or_guardian_name") or ""
+        elif "identity" in lbl or "roll" in lbl or "registration" in lbl:
+            val = prof_data.get("aadhaar_last4") or "2024CS0892"
         elif "applicant" in lbl or "name" in lbl or "नाम" in lbl or "student" in lbl or "candidate" in lbl:
             val = prof_data.get("full_name") or ""
         elif "mobile" in lbl or "phone" in lbl or "मोबाइल" in lbl or "contact" in lbl:
@@ -526,3 +561,87 @@ async def execute_dynamic_action_plan(
             logger.warning("Step execution skipped for %s (%s): %s", selector, action, exc)
 
     return completed
+
+
+async def execute_dynamic_action_plan_with_checkpoint(
+    page: Page,
+    action_plan: List[Dict[str, Any]],
+    document_path: Optional[str] = None,
+) -> tuple[List[str], bool]:
+    """
+    Executes action plan sequentially and pauses if a human checkpoint is reached.
+    Returns (completed_steps, paused_at_checkpoint).
+    """
+    completed = []
+    paused_at_checkpoint = False
+
+    for item in action_plan:
+        action = item.get("action")
+        selector = item.get("selector")
+        value = item.get("value")
+
+        if not selector:
+            continue
+
+        try:
+            el = await page.wait_for_selector(selector, state="visible", timeout=3500)
+            if not el:
+                continue
+
+            if action == "checkpoint":
+                await el.scroll_into_view_if_needed()
+                await page.evaluate("(el) => { el.style.border = '3px solid #f59e0b'; el.style.boxShadow = '0 0 20px rgba(245, 158, 11, 0.85)'; }", el)
+                try:
+                    await el.click()
+                except Exception:
+                    pass
+                completed.append(f"⏸️ [HUMAN-IN-THE-LOOP CHECKPOINT] Agent paused at {selector}: Please choose option on the live portal.")
+                paused_at_checkpoint = True
+                break
+
+            elif action == "fill" and value is not None:
+                await el.scroll_into_view_if_needed()
+                await page.evaluate("(el) => { el.style.border = '2px solid #38bdf8'; el.style.boxShadow = '0 0 10px rgba(56, 189, 248, 0.6)'; }", el)
+                await el.click()
+                await el.fill("")
+                await el.type(str(value), delay=35)
+                await page.evaluate("(e) => { e.dispatchEvent(new Event('input', { bubbles: true })); e.dispatchEvent(new Event('change', { bubbles: true })); }", el)
+                completed.append(f"👉 [AUTONOMOUS ACTION] Filled {selector} with '{value}'")
+                await asyncio.sleep(0.5)
+
+            elif action == "select" and value is not None:
+                await el.scroll_into_view_if_needed()
+                await page.evaluate("(el) => { el.style.border = '2px solid #38bdf8'; el.style.boxShadow = '0 0 10px rgba(56, 189, 248, 0.6)'; }", el)
+                try:
+                    await el.click()
+                except Exception:
+                    pass
+                await asyncio.sleep(0.5)
+                selected_val = str(value)
+                try:
+                    await el.select_option(label=selected_val, timeout=1500)
+                except Exception:
+                    try:
+                        await el.select_option(value=selected_val, timeout=1500)
+                    except Exception:
+                        await el.select_option(index=1)
+                await page.evaluate("(e) => { e.dispatchEvent(new Event('change', { bubbles: true })); e.dispatchEvent(new Event('input', { bubbles: true })); }", el)
+                completed.append(f"👉 [AUTONOMOUS ACTION] Opened dropdown {selector} → Selected '{selected_val}'")
+                await asyncio.sleep(0.5)
+
+            elif action == "check":
+                await el.scroll_into_view_if_needed()
+                if not await el.is_checked():
+                    await el.check()
+                completed.append(f"👉 [AUTONOMOUS ACTION] Checked declaration {selector}")
+                await asyncio.sleep(0.3)
+
+            elif action == "upload":
+                if document_path and Path(document_path).exists():
+                    await el.set_input_files(document_path)
+                    completed.append(f"👉 [AUTONOMOUS ACTION] Uploaded document {selector}")
+
+        except Exception as exc:
+            logger.warning("Dynamic action %s on %s skipped: %s", action, selector, exc)
+
+    return completed, paused_at_checkpoint

@@ -15,7 +15,15 @@ import {
   DynamicScanResponse,
 } from './types';
 
-const BASE_URL = (import.meta as any).env?.VITE_API_URL || 'http://127.0.0.1:8000';
+const getBaseUrl = (): string => {
+  const envUrl = (import.meta as any).env?.VITE_API_URL;
+  if (envUrl) return envUrl;
+  if (typeof window !== 'undefined' && window.location.hostname) {
+    return `http://${window.location.hostname}:8000`;
+  }
+  return 'http://127.0.0.1:8000';
+};
+const BASE_URL = getBaseUrl();
 
 // ── 0. Intent Classification (Bugs 1 & 2: Dynamic Search Routing) ─────────────
 
@@ -112,15 +120,36 @@ export const KNOWN_SERVICES_CATALOG: IntentClassificationResponse[] = [
     description: 'Universal unified digital portal for applying to state certificates (income, caste, domicile) and citizen welfare schemes.',
   },
   {
+    service_id: 'digilocker_apaar',
+    service_name: 'DigiLocker — APAAR ID / ABC ID Issuance',
+    portal_id: 'DIGILOCKER_APAAR_PORTAL',
+    portal_name: 'DigiLocker (Academic Bank of Credits / Ministry of Education)',
+    portal_url: 'https://www.digilocker.gov.in/web/login',
+    category: 'education',
+    required_documents: [],
+    confidence: 0.99,
+    description: 'APAAR (Automated Permanent Academic Account Registry) ID is the One Nation One Student ID created under NEP 2020 by the Ministry of Education. Digitally issued directly via DigiLocker from official school & university records without requiring physical document uploads.',
+    ai_advice: 'I will help you issue your APAAR ID through DigiLocker. The process is completely paperless (0 document uploads required). Our autonomous agent will assist you with logging into DigiLocker, automatically navigate directly to the APAAR / Academic Bank of Credits issuance form, select the academic options, pause at the Human-in-the-Loop checkpoint for you to select your specific School / Board, autofill your student details, and safely stop right before final submission.',
+    cta_message: 'Proceed to Verification & Launch Agent',
+    workflow_steps: [
+      '1. Live Citizen Authentication & Sign-In on DigiLocker',
+      '2. Autonomous Deep Navigation to APAAR ID Form',
+      '3. Human-in-the-Loop Selection: Pick your School/Board',
+      '4. Form Pre-fill & Sovereign Final Review (Pre-Submit Stop)'
+    ]
+  },
+  {
     service_id: 'digilocker',
     service_name: 'DigiLocker — National Digital Document Wallet & Citizen Sign-up',
     portal_id: 'DIGILOCKER_PORTAL',
     portal_name: 'DigiLocker Official Portal (MeitY)',
-    portal_url: 'https://www.digilocker.gov.in/',
+    portal_url: 'https://www.digilocker.gov.in/web/login',
     category: 'general',
     required_documents: [],
     confidence: 0.98,
-    description: 'Direct citizen sign-up for DigiLocker wallet. 100% online registration without document upload.',
+    description: 'DigiLocker is the Government of India\'s flagship digital identity and document wallet under Digital India (MeitY), providing every citizen with a secure cloud account for authentic digital documents issued directly by government authorities.',
+    ai_advice: 'DigiLocker lets you store, access, and share your important documents (Aadhaar, PAN, marksheets, certificates) digitally. You can register or sign in directly with your mobile number or Aadhaar linked with real-time OTP verification.',
+    cta_message: 'Launch DigiLocker Portal',
   },
 ];
 
@@ -131,9 +160,20 @@ export const KNOWN_SERVICES_CATALOG: IntentClassificationResponse[] = [
 export const matchIntentFallback = (query: string): IntentClassificationResponse => {
   const q = (query || '').toLowerCase().trim();
 
-  // DigiLocker Citizen Sign-up (Zero document upload needed)
+  // DigiLocker APAAR / ABC ID
+  if (/apaar|abc\s*id|academic\s*bank|student\s*id.*digilocker|digilocker.*apaar/i.test(q)) {
+    return KNOWN_SERVICES_CATALOG.find((k) => k.service_id === 'digilocker_apaar') || KNOWN_SERVICES_CATALOG[0];
+  }
+
+  // DigiLocker Citizen Sign-up
   if (/digilocker|digi\s*locker|digital\s*locker/i.test(q)) {
-    return KNOWN_SERVICES_CATALOG.find((k) => k.service_id === 'digilocker') || KNOWN_SERVICES_CATALOG[0];
+    const base = KNOWN_SERVICES_CATALOG.find((k) => k.service_id === 'digilocker') || KNOWN_SERVICES_CATALOG[0];
+    return {
+      ...base,
+      description: 'DigiLocker is the Government of India\'s flagship digital identity and document wallet under Digital India (MeitY), providing every citizen with a secure cloud account for authentic digital documents issued directly by government authorities.',
+      ai_advice: 'DigiLocker lets you store, view, and share government-issued documents digitally (including Aadhaar, PAN card, vehicle registration, and academic marksheets). You can register or log in using your mobile number or Aadhaar with live OTP verification. All documents issued in DigiLocker are legally recognized on par with original physical documents under Rule 9A of the Information Technology Rules.',
+      cta_message: 'Launch DigiLocker Portal',
+    };
   }
 
   // Education & Scholarships
@@ -340,4 +380,46 @@ export const scanPortalDom = async (
   });
   return resp.data;
 };
+
+/**
+ * Autonomous Deep-Navigation for DigiLocker APAAR ID form post-login.
+ * POST /api/apply/digilocker-navigate
+ */
+export const navigateDigilockerApaar = async (sessionId: string): Promise<ApplyStartResponse> => {
+  const resp = await axios.post<ApplyStartResponse>(`${BASE_URL}/api/apply/digilocker-navigate`, {
+    session_id: sessionId,
+  });
+  return resp.data;
+};
+
+/**
+ * Autonomous autofill after Human-in-the-Loop Institution/Board selection.
+ * POST /api/apply/digilocker-autofill
+ */
+export const autofillDigilockerApaar = async (
+  sessionId: string,
+  selectedBoard?: string
+): Promise<ApplyResumeResponse> => {
+  const resp = await axios.post<ApplyResumeResponse>(`${BASE_URL}/api/apply/digilocker-autofill`, {
+    session_id: sessionId,
+    selected_board: selectedBoard || null,
+  });
+  return resp.data;
+};
+
+/**
+ * Check live browser session state and current URL.
+ * GET /api/apply/session-status/{session_id}
+ */
+export const checkSessionStatus = async (sessionId: string): Promise<{
+  session_id: string;
+  status: string;
+  current_url: string;
+  is_logged_in: boolean;
+  steps_completed: string[];
+}> => {
+  const resp = await axios.get(`${BASE_URL}/api/apply/session-status/${sessionId}`);
+  return resp.data;
+};
+
 

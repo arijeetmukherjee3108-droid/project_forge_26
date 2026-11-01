@@ -19,6 +19,9 @@ import {
   fetchGoogleVaultFile,
   classifyIntent,
   scanPortalDom,
+  navigateDigilockerApaar,
+  autofillDigilockerApaar,
+  checkSessionStatus,
   KNOWN_SERVICES_CATALOG,
 } from './api';
 
@@ -497,11 +500,24 @@ const getRelevantFieldsForService = (
   );
 };
 
-export const isDocumentUploadRequired = (
+export const normalizePortalUrl = (rawUrl?: string): string => {
+  let url = (rawUrl || '').trim();
+  if (!url) return 'https://www.digilocker.gov.in/web/login';
+  // Fix obsolete or broken DigiLocker /signin endpoint to official /web/login
+  if (/digilocker.*signin/i.test(url)) {
+    return 'https://www.digilocker.gov.in/web/login';
+  }
+  if (/^https?:\/\/digilocker\.gov\.in/i.test(url)) {
+    url = url.replace('digilocker.gov.in', 'www.digilocker.gov.in');
+  }
+  return url;
+};
+
+export const getRequiredDocsList = (
   target?: IntentClassificationResponse | null,
   blueprint?: DynamicScanResponse | null
-): boolean => {
-  if (!target) return true;
+): string[] => {
+  if (!target) return [];
 
   const sid = (target.service_id || '').toLowerCase();
   const sname = (target.service_name || '').toLowerCase();
@@ -513,34 +529,26 @@ export const isDocumentUploadRequired = (
     sname.includes('digilocker') ||
     pid.includes('digilocker')
   ) {
-    return false;
+    return [];
   }
 
   // If dynamic blueprint was scanned from DOM:
-  if (blueprint && Array.isArray(blueprint.fields) && blueprint.fields.length > 0) {
-    const hasFileField = blueprint.fields.some(
-      (f) => f.type === 'file' || /upload|attach|document|file|certificate|दस्तावेज़/i.test(f.label || '')
-    );
-    const hasRequiredDocsMeta = Boolean(
-      blueprint.required_documents_meta && blueprint.required_documents_meta.length > 0
-    );
-    // If portal DOM was scanned and contains NO file inputs or doc meta, no upload is needed
-    if (!hasFileField && !hasRequiredDocsMeta) {
-      return false;
-    }
+  if (blueprint?.required_documents_meta && blueprint.required_documents_meta.length > 0) {
+    return blueprint.required_documents_meta.map((m) => m.display_name || m.doc_type);
   }
 
   const docs = target.required_documents || [];
-  if (docs.length === 0) {
-    return false;
-  }
-
-  // Filter out dummy values like "none", "not required", "nil", "n/a"
-  const validDocs = docs.filter(
+  return docs.filter(
     (d) => d && !/^(none|nil|null|not\s*required|no\s*doc.*|na|n\/a)$/i.test(d.trim())
   );
+};
 
-  return validDocs.length > 0;
+export const isDocumentUploadRequired = (
+  target?: IntentClassificationResponse | null,
+  blueprint?: DynamicScanResponse | null
+): boolean => {
+  const docs = getRequiredDocsList(target, blueprint);
+  return docs.length > 0;
 };
 
 const App: React.FC = () => {
@@ -644,7 +652,142 @@ const App: React.FC = () => {
   const [activeFieldIndex, setActiveFieldIndex] = useState(-1);
   const [submitted, setSubmitted] = useState(false);
   const [showQuickEdit, setShowQuickEdit] = useState(false);
-  const [portalViewMode, setPortalViewMode] = useState<'interactive' | 'screenshot'>('interactive');
+  const [portalViewMode, setPortalViewMode] = useState<'live' | 'screenshot' | 'interactive'>('live');
+  const [step4Layout, setStep4Layout] = useState<'copilot' | 'split'>('copilot');
+  const [agentStatus, setAgentStatus] = useState<string>('ready');
+  const [selectedBoard, setSelectedBoard] = useState<string>('Central Board of Secondary Education (CBSE)');
+  const [liveActionPlan, setLiveActionPlan] = useState<any[]>([]);
+  const [liveDetectedFields, setLiveDetectedFields] = useState<any[]>([]);
+
+  const handleDigilockerNavigate = async () => {
+    if (!sessionId) {
+      showToast('No active agent session. Please launch agent first.', 'error');
+      return;
+    }
+    setLoading(true);
+    setAgentRunning(true);
+    setAgentLog((prev) => [
+      ...prev,
+      '⚡ [CITIZEN CONFIRMATION] Logged in successfully!',
+      '🧭 Autonomous agent navigating to APAAR / Academic Bank of Credits issuance...',
+      '🤖 Scanning live DOM with Groq AI Form Agent...'
+    ]);
+    try {
+      const resp = await navigateDigilockerApaar(sessionId);
+      const steps = resp.steps_completed || resp.log_steps || [];
+      if (steps.length > 0) {
+        setAgentLog(steps);
+      }
+      if (resp.page_preview_b64) setPageScreenshot(resp.page_preview_b64);
+      setAgentStatus(resp.status);
+      if (resp.action_plan && resp.action_plan.length > 0) {
+        setLiveActionPlan(resp.action_plan);
+      }
+      if (resp.detected_fields && resp.detected_fields.length > 0) {
+        setLiveDetectedFields(resp.detected_fields);
+      }
+
+      setAgentRunning(false);
+      setAgentDone(true);
+
+      if (resp.status === 'awaiting_user_selection') {
+        showToast('Agent reached Institution/Board selection checkpoint.', 'success');
+      } else if (resp.status === 'ready_to_submit') {
+        setSubmitted(true);
+        showToast('Form 100% autofilled! Sovereign safety checkpoint reached.', 'success');
+      } else if (resp.status === 'awaiting_login') {
+        showToast('Please complete sign-in on the browser window first.', 'info');
+      } else {
+        showToast('Live portal connected. Waiting for issuance form to render...', 'info');
+      }
+    } catch (err: any) {
+      setAgentRunning(false);
+      const msg = err?.response?.data?.detail || err?.message || 'Navigation failed.';
+      setAgentLog((prev) => [...prev, `❌ [ERROR] ${msg}`]);
+      showToast(`Navigation error: ${msg}`, 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDigilockerAutofill = async () => {
+    if (!sessionId) {
+      showToast('No active agent session.', 'error');
+      return;
+    }
+    setLoading(true);
+    setAgentRunning(true);
+    setAgentLog((prev) => [
+      ...prev,
+      `👉 Selecting Issuing Institution / Board: ${selectedBoard}...`,
+      '✍️ Confirming statutory consent and preparing final form fields...',
+      '🟢 Highlighting final submission button (Safety Mode)...'
+    ]);
+    try {
+      const resp = await autofillDigilockerApaar(sessionId, selectedBoard);
+      const steps = resp.steps_completed || [];
+      if (steps.length > 0) {
+        setAgentLog(steps);
+      }
+      if (resp.final_screenshot_b64) setPageScreenshot(resp.final_screenshot_b64);
+      setAgentStatus(resp.status);
+      setAgentRunning(false);
+      setAgentDone(true);
+      setSubmitted(true);
+      showToast('Form 100% autofilled! Sovereign safety checkpoint reached.', 'success');
+    } catch (err: any) {
+      setAgentRunning(false);
+      const msg = err?.response?.data?.detail || err?.message || 'Autofill failed.';
+      setAgentLog((prev) => [...prev, `❌ [ERROR] ${msg}`]);
+      showToast(`Autofill error: ${msg}`, 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const openRealWebsiteSideBySide = (url?: string) => {
+    const targetUrl = normalizePortalUrl(
+      url ||
+      selectedService?.portal_url ||
+      dynamicBlueprint?.portal_url ||
+      profile.target_portal_url ||
+      'https://www.digilocker.gov.in/web/login'
+    );
+    const screenWidth = window.screen.availWidth || window.innerWidth;
+    const screenHeight = window.screen.availHeight || window.innerHeight;
+    const width = Math.floor(screenWidth * 0.52);
+    const height = screenHeight;
+    const left = Math.floor(screenWidth * 0.48);
+    const top = 0;
+
+    try {
+      const win = window.open(
+        targetUrl,
+        'GovPortalLiveWindow',
+        `width=${width},height=${height},left=${left},top=${top},menubar=no,toolbar=yes,location=yes,status=yes,scrollbars=yes,resizable=yes`
+      );
+      if (win) {
+        win.focus();
+        showToast(`Opened ${targetUrl} side-by-side on your screen!`, 'success');
+      } else {
+        window.open(targetUrl, '_blank');
+        showToast(`Opened ${targetUrl} in a new tab!`, 'info');
+      }
+    } catch {
+      window.open(targetUrl, '_blank');
+    }
+  };
+
+  useEffect(() => {
+    if (currentStep === 4) {
+      const targetUrl =
+        selectedService?.portal_url ||
+        dynamicBlueprint?.portal_url ||
+        profile.target_portal_url ||
+        'https://www.digilocker.gov.in/';
+      openRealWebsiteSideBySide(targetUrl);
+    }
+  }, [currentStep]);
   // Bug 7: Citizen Desired Account Password (removed hardcoded 'ADmin@357')
   const [portalPassword, setPortalPassword] = useState('');
   const [portalPhase, setPortalPhase] = useState<'LOGIN' | 'FORM' | 'SUBMIT'>('LOGIN');
@@ -710,13 +853,37 @@ const App: React.FC = () => {
     setTimeout(() => setToast(null), 3500);
   };
 
-  // Step Completion Validation (Gates)
+  // Step Completion Validation (Gates & Strict Document Counter)
   const isDocRequired = isDocumentUploadRequired(selectedService, dynamicBlueprint);
+  const requiredDocsList = useMemo(() => {
+    return getRequiredDocsList(selectedService, dynamicBlueprint);
+  }, [selectedService, dynamicBlueprint]);
+
+  const requiredDocsCount = requiredDocsList.length;
+  const isCompulsoryDocs = Boolean(isDocRequired && requiredDocsCount > 0);
+
+  const uploadedDocsCount = useMemo(() => {
+    if (files.length > 0) return files.length;
+    if (file) return 1;
+    if (profile.source_documents && profile.source_documents.length > 0) {
+      return profile.source_documents.length;
+    }
+    return 0;
+  }, [files, file, profile.source_documents]);
+
+  const hasAllCompulsoryDocs = !isCompulsoryDocs || (uploadedDocsCount >= requiredDocsCount);
   const hasExtractedDocument = Boolean(
     extraction !== null || (profile.source_documents && profile.source_documents.length > 0)
   );
+
   const isStep1Done = Boolean(selectedService !== null || intent.trim().length > 0);
-  const isStep2Done = Boolean(!isDocRequired || docStepSkipped || hasExtractedDocument);
+  // Rule: If documents are compulsory, user MUST have uploaded ALL required documents (counter matches) and extracted data.
+  // For zero-document sites (like DigiLocker), isDocRequired is false, so step 2 is immediately done and never blocks.
+  const isStep2Done = Boolean(
+    !isDocRequired ||
+    (!isCompulsoryDocs && docStepSkipped) ||
+    (hasAllCompulsoryDocs && hasExtractedDocument)
+  );
   const isStep3Done = Boolean(verified);
 
   const canNavigateToStep = (stepNumber: number) => {
@@ -729,13 +896,23 @@ const App: React.FC = () => {
 
   const handleStepClick = (targetStep: number) => {
     if (targetStep === 2 && !isDocRequired) {
-      showToast('No documents required for this service. You are already in the verification step.', 'info');
+      showToast('No documents required for this service (e.g. DigiLocker). Proceeding directly to verification step.', 'info');
       return;
     }
     if (!canNavigateToStep(targetStep)) {
-      if (targetStep === 2) showToast('Please enter your intent or select a service first', 'error');
-      else if (targetStep === 3) showToast('Please upload required document or choose manual entry', 'error');
-      else if (targetStep === 4) showToast('Please verify your citizen data before proceeding to Live Agent', 'error');
+      if (targetStep === 2) {
+        showToast('Please enter your intent or select a service first', 'error');
+      } else if (targetStep === 3) {
+        if (isCompulsoryDocs && uploadedDocsCount < requiredDocsCount) {
+          showToast(`All ${requiredDocsCount} required documents must be uploaded (${uploadedDocsCount}/${requiredDocsCount} uploaded). Please attach all documents to proceed.`, 'error');
+        } else if (!hasExtractedDocument) {
+          showToast('Please click "Extract Details" on your uploaded documents before verifying.', 'error');
+        } else {
+          showToast('Please complete document requirements first', 'error');
+        }
+      } else if (targetStep === 4) {
+        showToast('Please verify your citizen data before proceeding to Live Agent', 'error');
+      }
       return;
     }
     setCurrentStep(targetStep);
@@ -841,7 +1018,12 @@ const App: React.FC = () => {
 
     let scannedBlueprint: DynamicScanResponse | null = null;
     try {
-      const isKnownFastPath = target.service_id === '1784' || target.service_id === 'vidyalakshmi' || target.service_id === 'citizen_registration';
+      const isKnownFastPath =
+        target.service_id === '1784' ||
+        target.service_id === 'vidyalakshmi' ||
+        target.service_id === 'citizen_registration' ||
+        target.service_id.toLowerCase().includes('digilocker') ||
+        (target.portal_id || '').toLowerCase().includes('digilocker');
       if (!isKnownFastPath && (target.portal_url || target.service_id)) {
         setNavStepText(`AI Form Agent is scanning live portal DOM and discovering required fields & upload slots...`);
         scannedBlueprint = await scanPortal(target.portal_url || target.service_id);
@@ -1011,6 +1193,7 @@ const App: React.FC = () => {
       const incoming = Array.from(e.target.files);
       setFiles((prev) => [...prev, ...incoming]);
       setFile(incoming[0]);
+      e.target.value = '';
     }
   };
 
@@ -1401,6 +1584,10 @@ const App: React.FC = () => {
         profileResult.date_of_birth = profile.date_of_birth;
       }
 
+      const updatedFiles = [...files, finalFile];
+      setFiles(updatedFiles);
+      setFile(finalFile);
+
       setExtraction({
         profile: profileResult!,
         uncertain_fields: uncertain,
@@ -1409,9 +1596,21 @@ const App: React.FC = () => {
       });
       setProfile(profileResult!);
       setUncertainFields(uncertain);
-      showToast(`Retrieved "${chosenFile.name}" from Google Vault & extracted profile!`, 'success');
       setShowVaultModal(false);
-      setCurrentStep(3);
+
+      const requiredList = getRequiredDocsList(selectedService, dynamicBlueprint);
+      const isCompulsory = requiredList.length > 0;
+      const count = updatedFiles.length;
+
+      if (isCompulsory && count < requiredList.length) {
+        showToast(
+          `Retrieved "${chosenFile.name}" from Google Vault (${count}/${requiredList.length} uploaded). Please upload ${requiredList.length - count} more required document(s) to unlock Step 3.`,
+          'info'
+        );
+      } else {
+        showToast(`Retrieved "${chosenFile.name}" from Google Vault! All required documents uploaded (${count}/${isCompulsory ? requiredList.length : count}).`, 'success');
+        setCurrentStep(3);
+      }
     } catch (err: any) {
       showToast(err?.message || 'Failed to download document from Google Vault.', 'error');
     } finally {
@@ -1443,6 +1642,10 @@ const App: React.FC = () => {
   };
 
   const handleProceedManually = () => {
+    if (isCompulsoryDocs && uploadedDocsCount < requiredDocsCount) {
+      showToast(`Document upload is mandatory for this scheme (${uploadedDocsCount}/${requiredDocsCount} uploaded). Manual skip is not permitted.`, 'error');
+      return;
+    }
     setProfile((prev) => ({
       ...prev,
       state: prev.state || 'Uttar Pradesh',
@@ -1560,7 +1763,8 @@ const App: React.FC = () => {
     showToast(`Logged in to ${pName}! Application form loaded.`, 'success');
   };
 
-  const handleStartAgent = async () => {
+  const handleStartAgent = async (overridePortalUrl?: unknown) => {
+    const cleanOverrideUrl = typeof overridePortalUrl === 'string' ? overridePortalUrl : undefined;
     if (!verified) {
       showToast('Please confirm verification of your data first.', 'error');
       return;
@@ -1597,34 +1801,38 @@ const App: React.FC = () => {
     setAgentRunning(true);
     setAgentDone(false);
 
-    const targetServiceId = selectedService?.service_id || profile.target_service_id || '1784';
-    const isTargetVL =
-      targetServiceId === 'vidyalakshmi' ||
-      selectedService?.portal_id === 'VIDYA_LAKSHMI_PORTAL' ||
-      /vidya|lakshmi/i.test(targetServiceId) ||
-      /vidya|lakshmi/i.test(selectedService?.service_name || '') ||
-      /vidyalakshmi/i.test(selectedService?.portal_url || '');
-
-    const isTargetSP =
-      targetServiceId === '1784' ||
-      targetServiceId === 'citizen_registration' ||
-      selectedService?.portal_id === 'SERVICE_PLUS_REGISTRATION';
-
-    const portalName = selectedService?.portal_name || (isTargetVL ? 'Vidya Lakshmi Portal (Ministry of Education & NSDL)' : isTargetSP ? 'ServicePlus citizen registration portal' : (dynamicBlueprint?.title || selectedService?.service_name || 'Official Government Portal'));
-    const portalUrl = selectedService?.portal_url || (isTargetVL ? 'https://www.vidyalakshmi.co.in/Students/' : isTargetSP ? 'https://serviceonline.gov.in/citizenRegistration.html' : (dynamicBlueprint?.portal_url || 'https://serviceonline.gov.in'));
-    const isDynamicTarget = !isTargetVL && !isTargetSP;
-    const targetPortalId = isDynamicTarget
-      ? (selectedService?.portal_url || selectedService?.service_id || 'dynamic_portal')
-      : (selectedService?.portal_id || profile.target_portal_id || (isTargetVL ? 'VIDYA_LAKSHMI_PORTAL' : 'SERVICE_PLUS_REGISTRATION'));
-
-    setAgentLog([
-      '🚀 Initializing Playwright browser in visible Chromium mode...',
-      `🌐 Navigating to ${portalName} (${portalUrl})...`,
-      '✍️ Autonomous agent mapping verified citizen profile to official portal fields...'
-    ]);
     try {
+      const targetServiceId = selectedService?.service_id || profile.target_service_id || '1784';
+      const isTargetVL =
+        targetServiceId === 'vidyalakshmi' ||
+        selectedService?.portal_id === 'VIDYA_LAKSHMI_PORTAL' ||
+        /vidya|lakshmi/i.test(targetServiceId) ||
+        /vidya|lakshmi/i.test(selectedService?.service_name || '') ||
+        /vidyalakshmi/i.test(selectedService?.portal_url || '');
+
+      const isTargetSP =
+        targetServiceId === '1784' ||
+        targetServiceId === 'citizen_registration' ||
+        selectedService?.portal_id === 'SERVICE_PLUS_REGISTRATION';
+
+      const portalName = cleanOverrideUrl && cleanOverrideUrl.includes('mock') ? 'DigiLocker APAAR Testing Sandbox' : (selectedService?.portal_name || (isTargetVL ? 'Vidya Lakshmi Portal (Ministry of Education & NSDL)' : isTargetSP ? 'ServicePlus citizen registration portal' : (dynamicBlueprint?.title || selectedService?.service_name || 'Official Government Portal')));
+      const portalUrl = cleanOverrideUrl || selectedService?.portal_url || (isTargetVL ? 'https://www.vidyalakshmi.co.in/Students/' : isTargetSP ? 'https://serviceonline.gov.in/citizenRegistration.html' : (dynamicBlueprint?.portal_url || 'https://serviceonline.gov.in'));
+      const isDynamicTarget = !isTargetVL && !isTargetSP;
+      const targetPortalId = cleanOverrideUrl
+        ? cleanOverrideUrl
+        : isDynamicTarget
+        ? (selectedService?.portal_url || selectedService?.service_id || 'dynamic_portal')
+        : (selectedService?.portal_id || profile.target_portal_id || (isTargetVL ? 'VIDYA_LAKSHMI_PORTAL' : 'SERVICE_PLUS_REGISTRATION'));
+
+      setAgentLog([
+        '🚀 Initializing Playwright browser in visible Chromium mode...',
+        `🌐 Navigating to ${portalName} (${portalUrl})...`,
+        '✍️ Autonomous agent mapping verified citizen profile to official portal fields...'
+      ]);
+
       const docFilename = profile.source_documents?.find(f => f.startsWith('saved:'))?.replace('saved:', '');
-      const resp = await startApplication(profile, targetPortalId, docFilename);
+      const activeProfile = cleanOverrideUrl ? { ...profile, target_portal_url: cleanOverrideUrl } : profile;
+      const resp = await startApplication(activeProfile, targetPortalId, docFilename);
       const steps = resp.steps_completed || resp.log_steps || [];
       if (steps.length > 0) {
         setAgentLog(steps);
@@ -1632,14 +1840,23 @@ const App: React.FC = () => {
       if (resp.session_id) setSessionId(resp.session_id);
       if (resp.page_preview_b64) setPageScreenshot(resp.page_preview_b64);
       if (resp.captcha_image_b64) setCaptchaScreenshot(resp.captcha_image_b64);
+      if (resp.action_plan && resp.action_plan.length > 0) setLiveActionPlan(resp.action_plan);
+      if (resp.detected_fields && resp.detected_fields.length > 0) setLiveDetectedFields(resp.detected_fields);
+      setAgentStatus(resp.status);
       setAgentRunning(false);
       if (resp.status === 'failed') {
         setAgentDone(false);
         showToast(resp.message || 'Agent encountered an issue.', 'error');
         setAgentLog(prev => [...prev, `❌ [FAILED] ${resp.message || 'Agent failed to complete form.'}`]);
+      } else if (resp.status === 'awaiting_login') {
+        setAgentDone(true);
+        showToast(resp.message || 'Agent docked on DigiLocker login gateway. Please sign in on browser.', 'info');
+      } else if (resp.status === 'awaiting_user_selection') {
+        setAgentDone(true);
+        showToast('Agent reached Institution/Board selection checkpoint.', 'success');
       } else {
         setAgentDone(true);
-        showToast(resp.message || 'Live agent completed filling fields. Please enter CAPTCHA.', 'success');
+        showToast(resp.message || 'Live agent completed filling fields.', 'success');
       }
     } catch (err: any) {
       setAgentRunning(false);
@@ -1703,6 +1920,13 @@ const App: React.FC = () => {
         // ignore error if session already closed
       }
     }
+    setSessionId('');
+    setAgentLog([]);
+    setAgentStatus('ready');
+    setAgentDone(false);
+    setSubmitted(false);
+    setLiveActionPlan([]);
+    setLiveDetectedFields([]);
     setCurrentStep(1);
     showToast('Agent stopped. Returned to Home.', 'info');
   };
@@ -1815,6 +2039,8 @@ const App: React.FC = () => {
               let label = s.label;
               if (s.num === 2 && !isDocRequired) {
                 label = 'Documents (Not Needed)';
+              } else if (s.num === 2 && isCompulsoryDocs) {
+                label = `Documents (${uploadedDocsCount}/${requiredDocsCount})`;
               }
               const isCompleted = currentStep > s.num || (s.num === 2 && !isDocRequired && currentStep >= 3);
               return (
@@ -2250,72 +2476,125 @@ const App: React.FC = () => {
                   : 'Attach your required document below (PDF or Image). AI will extract verified identity data for form pre-filling.'}
               </p>
 
-              {/* Required Documents Checklist (Prioritizes LLM Brain classification) */}
-              {((selectedService?.required_documents && selectedService.required_documents.length > 0) ||
-                (dynamicBlueprint?.required_documents_meta && dynamicBlueprint.required_documents_meta.length > 0)) && (
-                <div style={{ marginBottom: '1.25rem', background: 'rgba(255, 255, 255, 0.03)', border: '1px solid rgba(255, 255, 255, 0.08)', borderRadius: '12px', padding: '1rem 1.25rem' }}>
-                  <div style={{ fontSize: '0.8rem', fontWeight: 700, color: '#f8fafc', marginBottom: '0.65rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <span style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
-                      <span>REQUIRED DOCUMENTS FOR THIS APPLICATION:</span>
+              {/* ── LIVE MANDATORY DOCUMENT COUNTER & CHECKLIST ── */}
+              {isCompulsoryDocs ? (
+                <div
+                  style={{
+                    marginBottom: '1.25rem',
+                    background: uploadedDocsCount >= requiredDocsCount
+                      ? 'linear-gradient(135deg, rgba(16, 185, 129, 0.12) 0%, rgba(5, 150, 105, 0.05) 100%)'
+                      : 'linear-gradient(135deg, rgba(245, 158, 11, 0.12) 0%, rgba(217, 119, 6, 0.05) 100%)',
+                    border: uploadedDocsCount >= requiredDocsCount
+                      ? '1px solid rgba(16, 185, 129, 0.35)'
+                      : '1px solid rgba(245, 158, 11, 0.35)',
+                    borderRadius: '12px',
+                    padding: '1.1rem 1.25rem',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.65rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem' }}>
+                      <span style={{ fontSize: '1.25rem' }}>
+                        {uploadedDocsCount >= requiredDocsCount ? '✅' : '📋'}
+                      </span>
+                      <div>
+                        <div style={{ fontWeight: 700, fontSize: '0.92rem', color: '#f8fafc' }}>
+                          Mandatory Documents Required
+                        </div>
+                        <div style={{ fontSize: '0.74rem', color: '#94a3b8' }}>
+                          Upload all {requiredDocsCount} documents to unlock step 3 verification
+                        </div>
+                      </div>
+                    </div>
+                    <div
+                      style={{
+                        fontWeight: 800,
+                        fontSize: '0.88rem',
+                        padding: '0.3rem 0.85rem',
+                        borderRadius: '20px',
+                        background: uploadedDocsCount >= requiredDocsCount ? 'rgba(16, 185, 129, 0.2)' : 'rgba(245, 158, 11, 0.2)',
+                        color: uploadedDocsCount >= requiredDocsCount ? '#34d399' : '#fbbf24',
+                        border: uploadedDocsCount >= requiredDocsCount ? '1px solid rgba(16, 185, 129, 0.4)' : '1px solid rgba(245, 158, 11, 0.4)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.4rem',
+                      }}
+                    >
+                      <span>Counter:</span>
+                      <strong>{uploadedDocsCount} / {requiredDocsCount} Uploaded</strong>
+                    </div>
+                  </div>
+
+                  {/* Visual Progress Bar */}
+                  <div style={{ width: '100%', height: '8px', background: 'rgba(255, 255, 255, 0.08)', borderRadius: '4px', overflow: 'hidden', marginBottom: '0.75rem' }}>
+                    <div
+                      style={{
+                        width: `${Math.min(100, (uploadedDocsCount / requiredDocsCount) * 100)}%`,
+                        height: '100%',
+                        background: uploadedDocsCount >= requiredDocsCount ? 'linear-gradient(90deg, #10b981, #34d399)' : 'linear-gradient(90deg, #f59e0b, #fbbf24)',
+                        transition: 'width 0.3s ease',
+                      }}
+                    />
+                  </div>
+
+                  {/* Status Prompt Line */}
+                  <div style={{ fontSize: '0.8rem', color: uploadedDocsCount >= requiredDocsCount ? '#6ee7b7' : '#fcd34d', display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.85rem' }}>
+                    <span>
+                      {uploadedDocsCount >= requiredDocsCount
+                        ? '✓ All required documents attached! Click "Extract Details" below to pass to verification.'
+                        : `⚠️ Please upload ${requiredDocsCount - uploadedDocsCount} more required document(s) to proceed.`}
                     </span>
-                    <span style={{ fontSize: '0.68rem', color: '#38bdf8', background: 'rgba(56, 189, 248, 0.12)', border: '1px solid rgba(56, 189, 248, 0.25)', padding: '0.15rem 0.5rem', borderRadius: '4px' }}>
-                      Official Requirements
+                    <span style={{ fontWeight: 700 }}>
+                      {Math.round(Math.min(100, (uploadedDocsCount / requiredDocsCount) * 100))}%
                     </span>
                   </div>
 
-                  {/* Render Verified Service Documents */}
-                  <div style={{ display: 'flex', gap: '0.55rem', flexWrap: 'wrap' }}>
-                    {selectedService?.required_documents && selectedService.required_documents.length > 0 ? (
-                      selectedService.required_documents.map((doc, idx) => (
-                        <span
+                  {/* Itemized Document Checklist */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                    {requiredDocsList.map((doc, idx) => {
+                      const isAttached = idx < uploadedDocsCount;
+                      const attachedFile = files[idx] || (idx === 0 && file ? file : null);
+                      return (
+                        <div
                           key={idx}
-                          className="scheme-doc-pill"
                           style={{
-                            background: 'rgba(56, 189, 248, 0.12)',
-                            borderColor: 'rgba(56, 189, 248, 0.3)',
-                            color: '#38bdf8',
-                            padding: '0.35rem 0.75rem',
-                            borderRadius: '8px',
-                            fontSize: '0.8rem',
-                            display: 'inline-flex',
+                            display: 'flex',
                             alignItems: 'center',
-                            gap: '0.4rem',
+                            justifyContent: 'space-between',
+                            padding: '0.4rem 0.65rem',
+                            borderRadius: '8px',
+                            background: isAttached ? 'rgba(16, 185, 129, 0.1)' : 'rgba(255, 255, 255, 0.03)',
+                            border: isAttached ? '1px solid rgba(16, 185, 129, 0.25)' : '1px solid rgba(255, 255, 255, 0.06)',
+                            fontSize: '0.8rem',
+                            color: isAttached ? '#34d399' : '#cbd5e1',
                           }}
                         >
-                          <span>✓</span>
-                          <span>{doc}</span>
-                        </span>
-                      ))
-                    ) : (
-                      dynamicBlueprint?.required_documents_meta?.map((doc, idx) => (
-                        <span
-                          key={idx}
-                          className="scheme-doc-pill"
-                          style={{
-                            background: 'rgba(56, 189, 248, 0.12)',
-                            borderColor: 'rgba(56, 189, 248, 0.3)',
-                            color: '#38bdf8',
-                            padding: '0.35rem 0.75rem',
-                            borderRadius: '8px',
-                            fontSize: '0.8rem',
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '0.4rem',
-                          }}
-                        >
-                          <span>✓</span>
-                          <span>{doc.display_name}</span>
-                        </span>
-                      ))
-                    )}
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                            <span style={{ fontWeight: 800 }}>{isAttached ? '✓' : '○'}</span>
+                            <span style={{ fontWeight: isAttached ? 600 : 400 }}>
+                              Doc #{idx + 1}: {doc}
+                            </span>
+                          </div>
+                          {isAttached && attachedFile && (
+                            <span style={{ fontSize: '0.72rem', color: '#93c5fd', fontStyle: 'italic' }}>
+                              📎 {attachedFile.name}
+                            </span>
+                          )}
+                          {!isAttached && (
+                            <span style={{ fontSize: '0.72rem', color: '#fbbf24' }}>
+                              Required
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
 
-                  {/* Auto-Compression Assurance Callout (Concise, zero clutter) */}
+                  {/* Auto-Compression Assurance Callout */}
                   <div style={{ marginTop: '0.75rem', background: 'rgba(16, 185, 129, 0.06)', border: '1px solid rgba(16, 185, 129, 0.2)', borderRadius: '8px', padding: '0.45rem 0.75rem', fontSize: '0.76rem', color: '#a7f3d0' }}>
                     <strong style={{ color: '#34d399' }}>Smart Auto-Compression:</strong> Files are automatically compressed to meet official portal size limits.
                   </div>
                 </div>
-              )}
+              ) : null}
 
               <div
                 className={`gemini-dropzone ${dragOver ? 'drag-active' : ''}`}
@@ -2362,47 +2641,69 @@ const App: React.FC = () => {
                   </div>
                 </button>
 
-                <div className="manual-entry-divider">
-                  <span className="divider-line" />
-                  <span className="divider-text">OR FILL MANUALLY</span>
-                  <span className="divider-line" />
-                </div>
+                {!isCompulsoryDocs && (
+                  <>
+                    <div className="manual-entry-divider">
+                      <span className="divider-line" />
+                      <span className="divider-text">OR FILL MANUALLY</span>
+                      <span className="divider-line" />
+                    </div>
 
-                <button
-                  type="button"
-                  className="manual-entry-btn"
-                  onClick={handleProceedManually}
-                  title="Proceed directly to manual entry without uploading a certificate"
-                >
-                  <Icons.Connectors />
-                  <span>Enter Details Manually (Skip Upload) →</span>
-                </button>
+                    <button
+                      type="button"
+                      className="manual-entry-btn"
+                      onClick={handleProceedManually}
+                      title="Proceed directly to manual entry without uploading a certificate"
+                    >
+                      <Icons.Connectors />
+                      <span>Enter Details Manually (Skip Upload) →</span>
+                    </button>
+                  </>
+                )}
               </div>
 
-              {/* Attached Files List (Supports Multiple Documents) */}
+              {/* Attached Files List (Supports Multiple Documents & Next Add) */}
               {files.length > 0 ? (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem', marginTop: '1rem' }}>
                   {files.map((f, idx) => (
                     <div key={idx} className="attached-file-pill">
                       <div className="file-info">
-                        <span>{f.name} ({(f.size / 1024).toFixed(1)} KB)</span>
+                        <span>Doc #{idx + 1}: {f.name} ({(f.size / 1024).toFixed(1)} KB)</span>
                       </div>
                       <button
                         className="file-delete-btn"
                         onClick={() => {
-                          setFiles((prev) => prev.filter((_, i) => i !== idx));
-                          if (files.length <= 1) setFile(null);
+                          setFiles((prev) => {
+                            const updated = prev.filter((_, i) => i !== idx);
+                            if (updated.length === 0) {
+                              setFile(null);
+                              setExtraction(null);
+                            } else {
+                              setFile(updated[0]);
+                            }
+                            return updated;
+                          });
                         }}
                       >✕</button>
                     </div>
                   ))}
+                  {isCompulsoryDocs && uploadedDocsCount < requiredDocsCount && (
+                    <button
+                      type="button"
+                      className="gemini-btn gemini-btn-tonal"
+                      style={{ fontSize: '0.8rem', padding: '0.35rem 0.8rem', marginTop: '0.35rem', alignSelf: 'flex-start' }}
+                      onClick={() => fileInputRef.current?.click()}
+                    >
+                      + Add Next Document ({uploadedDocsCount + 1}/{requiredDocsCount})
+                    </button>
+                  )}
                 </div>
               ) : file && (
                 <div className="attached-file-pill" style={{ marginTop: '1rem' }}>
                   <div className="file-info">
-                    <span>{file.name} ({(file.size / 1024).toFixed(1)} KB)</span>
+                    <span>Doc #1: {file.name} ({(file.size / 1024).toFixed(1)} KB)</span>
                   </div>
-                  <button className="file-delete-btn" onClick={() => { setFile(null); setExtraction(null); }}>✕</button>
+                  <button className="file-delete-btn" onClick={() => { setFile(null); setFiles([]); setExtraction(null); }}>✕</button>
                 </div>
               )}
 
@@ -2412,10 +2713,14 @@ const App: React.FC = () => {
                 </button>
                 <button
                   className="gemini-btn gemini-btn-primary"
-                  disabled={(files.length === 0 && !file) || loading}
+                  disabled={loading || (isCompulsoryDocs ? uploadedDocsCount < requiredDocsCount : (files.length === 0 && !file))}
                   onClick={handleUpload}
                 >
-                  {loading ? 'Extracting Data…' : `Extract Details from ${files.length > 1 ? `${files.length} Documents` : 'Document'}`}
+                  {loading
+                    ? 'Extracting Data…'
+                    : isCompulsoryDocs && uploadedDocsCount < requiredDocsCount
+                    ? `Upload All Documents (${uploadedDocsCount}/${requiredDocsCount}) to Extract`
+                    : `Extract Details from ${uploadedDocsCount > 1 ? `${uploadedDocsCount} Documents` : 'Document'}`}
                 </button>
               </div>
 
@@ -2492,17 +2797,37 @@ const App: React.FC = () => {
                     <button
                       type="button"
                       className="gemini-btn gemini-btn-primary"
-                      onClick={() => setCurrentStep(3)}
+                      disabled={isCompulsoryDocs && uploadedDocsCount < requiredDocsCount}
+                      onClick={() => {
+                        if (isCompulsoryDocs && uploadedDocsCount < requiredDocsCount) {
+                          showToast(`Please upload all ${requiredDocsCount} required documents first (${uploadedDocsCount}/${requiredDocsCount} uploaded).`, 'error');
+                          return;
+                        }
+                        setCurrentStep(3);
+                      }}
                     >
-                      Review & Verify Details →
+                      {isCompulsoryDocs && uploadedDocsCount < requiredDocsCount
+                        ? `Upload ${requiredDocsCount - uploadedDocsCount} more document(s) (${uploadedDocsCount}/${requiredDocsCount})`
+                        : `✓ All ${isCompulsoryDocs ? requiredDocsCount : uploadedDocsCount} Documents Verified — Review & Verify Details →`}
                     </button>
+                  </div>
+                </div>
+              ) : isCompulsoryDocs ? (
+                <div style={{ marginTop: '1.25rem', padding: '1rem 1.25rem', background: 'rgba(245, 158, 11, 0.04)', borderRadius: '10px', border: '1px dashed rgba(245, 158, 11, 0.3)', textAlign: 'center' }}>
+                  <div style={{ color: '#fbbf24', fontSize: '0.88rem', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', marginBottom: '0.35rem' }}>
+                    <span>🔒</span>
+                    <span>Compulsory Document Requirement Active</span>
+                  </div>
+                  <div style={{ color: '#94a3b8', fontSize: '0.8rem' }}>
+                    This government portal strictly requires all <strong>{requiredDocsCount} documents</strong> before verification.
+                    Current progress: <strong>{uploadedDocsCount} / {requiredDocsCount} uploaded</strong>.
                   </div>
                 </div>
               ) : (
                 <div style={{ marginTop: '1.25rem', padding: '1.1rem 1.25rem', background: 'rgba(255, 255, 255, 0.02)', borderRadius: '10px', border: '1px dashed rgba(56, 189, 248, 0.3)', textAlign: 'center' }}>
                   <div style={{ color: '#38bdf8', fontSize: '0.88rem', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', marginBottom: '0.35rem' }}>
                     <span>🔒</span>
-                    <span>Document Upload Recommended</span>
+                    <span>Document Upload Optional</span>
                   </div>
                   <div style={{ color: '#94a3b8', fontSize: '0.8rem', marginBottom: '0.85rem' }}>
                     Upload your document above and click <strong>Extract Details</strong> (or auto-fetch via Google Vault) to auto-fill your citizen profile, or skip to enter details manually.
@@ -3121,6 +3446,12 @@ const App: React.FC = () => {
           ════════════════════════════════════════ */}
           {currentStep === 4 && (() => {
             const currentServiceId = selectedService?.service_id || profile.target_service_id || '1784';
+            const isDigilocker =
+              currentServiceId.toLowerCase().includes('digilocker') ||
+              (selectedService?.service_name || '').toLowerCase().includes('digilocker') ||
+              (selectedService?.portal_url || '').toLowerCase().includes('digilocker') ||
+              selectedService?.portal_id === 'DIGILOCKER_PORTAL';
+
             const isVidyaLakshmi =
               currentServiceId === 'vidyalakshmi' ||
               selectedService?.portal_id === 'VIDYA_LAKSHMI_PORTAL' ||
@@ -3129,19 +3460,18 @@ const App: React.FC = () => {
               /vidyalakshmi/i.test(selectedService?.portal_url || '');
 
             const isServicePlus =
+              !isDigilocker &&
               (currentServiceId === '1784' || currentServiceId === 'citizen_registration') &&
-              !currentServiceId.toLowerCase().includes('digilocker') &&
-              !selectedService?.service_name?.toLowerCase().includes('digilocker') &&
-              !selectedService?.portal_url?.toLowerCase().includes('digilocker') &&
               selectedService?.portal_id !== 'DIGILOCKER_PORTAL';
 
-            const isDynamicPortal = !isVidyaLakshmi && !isServicePlus;
+            const isDynamicPortal = !isVidyaLakshmi && !isServicePlus && !isDigilocker;
 
-            const currentPortalUrl =
+            const currentPortalUrl = normalizePortalUrl(
               selectedService?.portal_url ||
               dynamicBlueprint?.portal_url ||
               profile.target_portal_url ||
-              (isVidyaLakshmi ? 'https://www.vidyalakshmi.co.in/Students/' : isServicePlus ? 'https://serviceonline.gov.in/citizenRegistration.html' : 'https://serviceonline.gov.in');
+              (isVidyaLakshmi ? 'https://www.vidyalakshmi.co.in/Students/' : isServicePlus ? 'https://serviceonline.gov.in/citizenRegistration.html' : isDigilocker ? 'https://www.digilocker.gov.in/web/login' : 'https://serviceonline.gov.in')
+            );
             const currentPortalName =
               selectedService?.portal_name ||
               dynamicBlueprint?.title ||
@@ -3170,7 +3500,7 @@ const App: React.FC = () => {
                         <button
                           type="button"
                           className="gemini-btn gemini-btn-primary"
-                          onClick={handleStartAgent}
+                          onClick={() => handleStartAgent()}
                           disabled={loading}
                           style={{ margin: '0 auto', display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}
                         >
@@ -3192,83 +3522,223 @@ const App: React.FC = () => {
                   </div>
                 </div>
 
-                {/* Human Checkpoint: CAPTCHA */}
+                {/* Human-in-the-Loop Mission Control */}
                 {agentDone && !submitted && (
-                  <div className="captcha-container">
-                    <div className="captcha-header">🔒 Live Portal CAPTCHA</div>
-                    <div className="captcha-sub">
-                      Agent paused at official portal checkpoint. Please enter the characters:
-                    </div>
-
-                    {captchaScreenshot ? (
+                  isDigilocker ? (
+                    agentStatus === 'awaiting_login' ? (
+                      <div className="login-gateway-card" style={{
+                        background: 'linear-gradient(135deg, rgba(14, 165, 233, 0.12) 0%, rgba(99, 102, 241, 0.12) 100%)',
+                        border: '1px solid rgba(56, 189, 248, 0.35)',
+                        borderRadius: '12px',
+                        padding: '1.2rem',
+                        marginTop: '0.85rem'
+                      }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.45rem' }}>
+                          <span style={{ fontSize: '1.25rem' }}>🔑</span>
+                          <span style={{ fontWeight: 700, fontSize: '0.95rem', color: '#f8fafc' }}>
+                            Live Portal Authentication Gateway
+                          </span>
+                        </div>
+                        <p style={{ color: '#cbd5e1', fontSize: '0.82rem', margin: '0 0 1rem', lineHeight: '1.5' }}>
+                          DigiLocker is open on your screen. Enter your Mobile / Aadhaar and complete the OTP sign-in in the browser window. Once logged in, click below to trigger autonomous APAAR ID navigation and form-filling!
+                        </p>
+                        <button
+                          type="button"
+                          className="gemini-btn gemini-btn-primary"
+                          style={{ width: '100%', fontSize: '0.92rem', padding: '0.65rem 1rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }}
+                          onClick={handleDigilockerNavigate}
+                          disabled={loading || agentRunning}
+                        >
+                          <span>⚡</span>
+                          <span>{loading ? 'Navigating to APAAR…' : "I'm Logged In — Auto-Navigate to APAAR ID"}</span>
+                        </button>
+                      </div>
+                    ) : agentStatus === 'running' || !agentStatus ? (
+                      <div className="portal-scanning-card" style={{
+                        background: 'linear-gradient(135deg, rgba(56, 189, 248, 0.1) 0%, rgba(99, 102, 241, 0.1) 100%)',
+                        border: '1px solid rgba(56, 189, 248, 0.35)',
+                        borderRadius: '12px',
+                        padding: '1.2rem',
+                        marginTop: '0.85rem'
+                      }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.45rem' }}>
+                          <span style={{ fontSize: '1.25rem' }}>⏳</span>
+                          <span style={{ fontWeight: 700, fontSize: '0.95rem', color: '#38bdf8' }}>
+                            Portal Connected — Monitoring Live DOM
+                          </span>
+                        </div>
+                        <p style={{ color: '#cbd5e1', fontSize: '0.82rem', margin: '0 0 1rem', lineHeight: '1.5' }}>
+                          Chromium is connected to your DigiLocker session. If you haven't opened the APAAR ID issuance form yet, click on 'Academic Bank of Credits' / 'APAAR' on your browser, or search 'APAAR'. As soon as the form opens, click below to autofill with Groq LLM!
+                        </p>
+                        <button
+                          type="button"
+                          className="gemini-btn gemini-btn-primary"
+                          style={{ width: '100%', fontSize: '0.92rem', padding: '0.65rem 1rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }}
+                          onClick={handleDigilockerNavigate}
+                          disabled={loading || agentRunning}
+                        >
+                          <span>🤖</span>
+                          <span>{loading ? 'Analyzing Portal DOM…' : 'Scan Form & Run Groq AI Autofill'}</span>
+                        </button>
+                      </div>
+                    ) : agentStatus === 'awaiting_user_selection' ? (
+                      <div className="hitl-checkpoint-card" style={{
+                        background: 'linear-gradient(135deg, rgba(245, 158, 11, 0.12) 0%, rgba(217, 119, 6, 0.12) 100%)',
+                        border: '1px solid rgba(245, 158, 11, 0.4)',
+                        borderRadius: '12px',
+                        padding: '1.2rem',
+                        marginTop: '0.85rem'
+                      }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.45rem' }}>
+                          <span style={{ fontSize: '1.25rem' }}>⏸️</span>
+                          <span style={{ fontWeight: 700, fontSize: '0.95rem', color: '#fef3c7' }}>
+                            Human-in-the-Loop: Select Your School / Board
+                          </span>
+                        </div>
+                        <p style={{ color: '#cbd5e1', fontSize: '0.82rem', margin: '0 0 0.85rem', lineHeight: '1.5' }}>
+                          The agent opened the academic dropdown on the live portal! Select your issuing institution in the browser window, or pick from the list below:
+                        </p>
+                        <div style={{ marginBottom: '0.85rem' }}>
+                          <select
+                            className="gemini-input"
+                            value={selectedBoard}
+                            onChange={(e) => setSelectedBoard(e.target.value)}
+                            style={{ width: '100%', padding: '0.55rem', background: '#0f172a', color: '#f8fafc', border: '1px solid #334155' }}
+                          >
+                            <option value="Central Board of Secondary Education (CBSE)">Central Board of Secondary Education (CBSE)</option>
+                            <option value="Council for the Indian School Certificate Examinations (CISCE)">CISCE / ICSE</option>
+                            <option value="National Institute of Open Schooling (NIOS)">National Institute of Open Schooling (NIOS)</option>
+                            <option value="University of Delhi (DU)">University of Delhi (DU)</option>
+                            <option value="University of Mumbai">University of Mumbai</option>
+                            <option value="Anna University">Anna University</option>
+                            <option value="Rajasthan Board of Secondary Education (RBSE)">Rajasthan Board (RBSE)</option>
+                            <option value="West Bengal Council of Higher Secondary Education (WBCHSE)">West Bengal Board (WBCHSE)</option>
+                            <option value="Maharashtra State Board (MSBSHSE)">Maharashtra Board (MSBSHSE)</option>
+                            <option value="Uttar Pradesh State Board (UPMSP)">Uttar Pradesh Board (UPMSP)</option>
+                          </select>
+                        </div>
+                        <button
+                          type="button"
+                          className="gemini-btn gemini-btn-success"
+                          style={{ width: '100%', fontSize: '0.92rem', padding: '0.65rem 1rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }}
+                          onClick={handleDigilockerAutofill}
+                          disabled={loading || agentRunning}
+                        >
+                          <span>👉</span>
+                          <span>{loading ? 'Executing Autofill…' : 'Resume Autofill & Pre-Submit Safety Check'}</span>
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="sovereign-safety-card" style={{
+                        background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.12) 0%, rgba(5, 150, 105, 0.12) 100%)',
+                        border: '1px solid rgba(16, 185, 129, 0.4)',
+                        borderRadius: '12px',
+                        padding: '1.2rem',
+                        marginTop: '0.85rem'
+                      }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.45rem' }}>
+                          <span style={{ fontSize: '1.25rem' }}>🛡️</span>
+                          <span style={{ fontWeight: 700, fontSize: '0.95rem', color: '#6ee7b7' }}>
+                            Sovereign Safety Checkpoint — 100% Autofilled
+                          </span>
+                        </div>
+                        <p style={{ color: '#cbd5e1', fontSize: '0.82rem', margin: '0 0 0.85rem', lineHeight: '1.5' }}>
+                          All fields have been filled, statutory consent accepted, and the <strong>Get Document</strong> button is illuminated in glowing emerald green on the portal. As per our sovereign safety guarantee, the agent halted before final submission.
+                        </p>
+                        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                          <button
+                            type="button"
+                            className="gemini-btn gemini-btn-success"
+                            style={{ fontSize: '0.82rem', padding: '0.45rem 0.9rem' }}
+                            onClick={() => {
+                              setSubmitted(true);
+                              showToast('Application verified under sovereign human review!', 'success');
+                            }}
+                          >
+                            ✓ Mark Review Complete
+                          </button>
+                          <button
+                            type="button"
+                            className="gemini-btn gemini-btn-tonal"
+                            style={{ fontSize: '0.82rem', padding: '0.45rem 0.9rem' }}
+                            onClick={() => openRealWebsiteSideBySide(currentPortalUrl)}
+                          >
+                            🚀 Focus Browser Window
+                          </button>
+                        </div>
+                      </div>
+                    )
+                  ) : Boolean(captchaScreenshot) ? (
+                    <div className="captcha-container">
+                      <div className="captcha-header">🔒 Live Portal CAPTCHA</div>
+                      <div className="captcha-sub">
+                        Agent paused at official portal checkpoint. Please enter the characters:
+                      </div>
                       <img
                         src={`data:image/png;base64,${captchaScreenshot}`}
                         alt="Portal Captcha"
                         style={{ maxWidth: '200px', borderRadius: '8px', marginBottom: '0.75rem', border: '1px solid #334155' }}
                       />
-                    ) : (
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
-                        <div className="sp-captcha-visual" style={{ width: '150px', height: '42px' }}>
-                          <span className="sp-mock-captcha-text">{fallbackCaptcha}</span>
-                        </div>
+                      <div>
+                        <input
+                          className="captcha-input-field"
+                          type="text"
+                          placeholder="Captcha"
+                          value={captchaText}
+                          onChange={(e) => setCaptchaText(e.target.value)}
+                        />
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'center' }}>
                         <button
-                          type="button"
-                          className="sp-captcha-btn"
-                          title="Refresh CAPTCHA"
-                          onClick={async () => {
-                            if (sessionId) {
-                              showToast('Refetching fresh CAPTCHA from official portal...', 'info');
-                              await handleStartAgent();
-                            } else {
-                              const newCode = refreshFallbackCaptcha();
-                              showToast(`Refreshed CAPTCHA: ${newCode}`, 'info');
-                            }
-                          }}
+                          className="gemini-btn gemini-btn-success"
+                          style={{ width: '100%' }}
+                          disabled={!captchaText || loading}
+                          onClick={() => handleResume('SUBMIT')}
                         >
-                          🔄
-                        </button>
-                        <button
-                          type="button"
-                          className="sp-captcha-btn"
-                          title="Listen to CAPTCHA"
-                          onClick={() => {
-                            if ('speechSynthesis' in window) {
-                              const textToRead = captchaText || fallbackCaptcha;
-                              const utt = new SpeechSynthesisUtterance(textToRead.split('').join(' '));
-                              utt.rate = 0.8;
-                              window.speechSynthesis.speak(utt);
-                              showToast('Playing audio CAPTCHA...', 'info');
-                            } else {
-                              showToast('Audio playback not supported in this browser', 'info');
-                            }
-                          }}
-                        >
-                          🔊
+                          {loading ? 'Submitting…' : 'Approve & Submit Registration'}
                         </button>
                       </div>
-                    )}
-
-                    <div>
-                      <input
-                        className="captcha-input-field"
-                        type="text"
-                        placeholder="Captcha"
-                        value={captchaText}
-                        onChange={(e) => setCaptchaText(e.target.value)}
-                      />
                     </div>
-
-                    <div style={{ display: 'flex', justifyContent: 'center' }}>
-                      <button
-                        className="gemini-btn gemini-btn-success"
-                        style={{ width: '100%' }}
-                        disabled={!captchaText || loading}
-                        onClick={() => handleResume('SUBMIT')}
-                      >
-                        {loading ? 'Submitting…' : 'Approve & Submit Registration'}
-                      </button>
+                  ) : (
+                    <div className="hitl-safety-card" style={{
+                      background: 'rgba(16, 185, 129, 0.08)',
+                      border: '1px solid rgba(16, 185, 129, 0.3)',
+                      borderRadius: '12px',
+                      padding: '1.1rem 1.25rem',
+                      marginTop: '0.75rem',
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem', marginBottom: '0.4rem' }}>
+                        <span style={{ fontSize: '1.2rem' }}>🛡️</span>
+                        <span style={{ fontWeight: 700, fontSize: '0.92rem', color: '#f8fafc' }}>
+                          Human-in-the-Loop Safety Checkpoint
+                        </span>
+                      </div>
+                      <p style={{ color: '#94a3b8', fontSize: '0.8rem', margin: '0 0 0.75rem', lineHeight: '1.5' }}>
+                        The official portal is open on your screen. No CAPTCHA is required for this view. You retain complete sovereign control over final form submission.
+                      </p>
+                      <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                        <button
+                          type="button"
+                          className="gemini-btn gemini-btn-success"
+                          style={{ fontSize: '0.82rem', padding: '0.4rem 0.85rem' }}
+                          onClick={() => {
+                            setSubmitted(true);
+                            showToast('Application verified under Human-in-the-Loop review!', 'success');
+                          }}
+                        >
+                          ✓ Mark Review Complete
+                        </button>
+                        <button
+                          type="button"
+                          className="gemini-btn gemini-btn-tonal"
+                          style={{ fontSize: '0.82rem', padding: '0.4rem 0.85rem' }}
+                          onClick={() => openRealWebsiteSideBySide(currentPortalUrl)}
+                        >
+                          🚀 Focus Portal Window
+                        </button>
+                      </div>
                     </div>
-                  </div>
+                  )
                 )}
 
                 <div style={{ display: 'flex', gap: '0.5rem' }}>
@@ -3283,6 +3753,99 @@ const App: React.FC = () => {
                   >
                     Stop Agent
                   </button>
+                </div>
+
+                {/* Autonomous Field Mapping Inspector */}
+                <div style={{ background: 'rgba(255, 255, 255, 0.03)', border: '1px solid rgba(255, 255, 255, 0.08)', borderRadius: '12px', padding: '1rem', marginTop: '0.75rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                      <span style={{ fontSize: '1.1rem' }}>🤖</span>
+                      <span style={{ fontWeight: 700, fontSize: '0.88rem', color: '#f8fafc' }}>
+                        Autonomous Live Agent Mapping
+                      </span>
+                    </div>
+                    <span style={{ fontSize: '0.7rem', color: '#10b981', background: 'rgba(16, 185, 129, 0.1)', padding: '0.15rem 0.5rem', borderRadius: '10px' }}>
+                      {isDigilocker ? 'DigiLocker APAAR' : 'Zero-Shot AI Mapping'}
+                    </span>
+                  </div>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem' }}>
+                    {liveActionPlan && liveActionPlan.length > 0 ? (
+                      liveActionPlan.map((act: any, idx: number) => {
+                        const sel = (act.selector || `field_${idx}`).toLowerCase();
+                        const friendlyLabel =
+                          sel.includes('student') || (sel.includes('name') && !sel.includes('institution')) ? 'Citizen / Student Name' :
+                          sel.includes('identity_type') || (sel.includes('type') && act.action === 'select' && !sel.includes('institution')) ? 'Identity Type (Dropdown)' :
+                          sel.includes('identity_value') || sel.includes('value') || sel.includes('roll') ? 'Identity Value / Student ID' :
+                          sel.includes('admission_year') || sel.includes('year') ? 'Admission Year' :
+                          sel.includes('institution_type') ? 'Institution Type' :
+                          sel.includes('institution_name') || sel.includes('board') || sel.includes('university') ? 'School / Board / University' :
+                          sel.includes('consent') || sel.includes('chk') ? 'Statutory Consent Declaration' :
+                          sel.includes('get_document') || sel.includes('submit') || sel.includes('btn') ? 'Final Submit Button (Safety Hold)' :
+                          act.selector;
+
+                        const displayVal = act.action === 'checkpoint'
+                          ? (selectedBoard || 'Citizen Selection Checkpoint')
+                          : (act.value !== null && act.value !== undefined ? String(act.value) : 'Action Prepared');
+
+                        const statusBadge =
+                          act.action === 'checkpoint' ? 'Human Checkpoint' :
+                          act.action === 'select' ? 'Auto-selected' :
+                          act.action === 'fill' ? 'Auto-typed' :
+                          act.action === 'check' ? 'Auto-checked' : 'AI Mapped';
+
+                        return (
+                          <div
+                            key={idx}
+                            style={{
+                              background: 'rgba(255, 255, 255, 0.02)',
+                              border: '1px solid rgba(255, 255, 255, 0.05)',
+                              borderRadius: '6px',
+                              padding: '0.35rem 0.6rem',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              gap: '0.5rem',
+                            }}
+                          >
+                            <div style={{ minWidth: 0, flex: 1 }}>
+                              <div style={{ fontSize: '0.65rem', color: '#94a3b8' }}>{friendlyLabel}</div>
+                              <div style={{ fontSize: '0.8rem', color: '#f1f5f9', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                {displayVal}
+                              </div>
+                            </div>
+                            <span style={{
+                              fontSize: '0.65rem',
+                              padding: '0.15rem 0.45rem',
+                              borderRadius: '4px',
+                              background: statusBadge.includes('Human') ? 'rgba(245, 158, 11, 0.15)' : 'rgba(16, 185, 129, 0.15)',
+                              color: statusBadge.includes('Human') ? '#f59e0b' : '#34d399',
+                              fontWeight: 600
+                            }}>
+                              {statusBadge}
+                            </span>
+                          </div>
+                        );
+                      })
+                    ) : (
+                      <div style={{
+                        padding: '1.25rem 0.9rem',
+                        textAlign: 'center',
+                        color: '#94a3b8',
+                        background: 'rgba(255, 255, 255, 0.015)',
+                        borderRadius: '8px',
+                        border: '1px dashed rgba(255, 255, 255, 0.08)'
+                      }}>
+                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', color: '#38bdf8', marginBottom: '0.4rem', fontWeight: 600, fontSize: '0.82rem' }}>
+                          <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: '#38bdf8' }} />
+                          Live DOM Reasoner Active
+                        </div>
+                        <p style={{ margin: 0, fontSize: '0.74rem', color: '#64748b', lineHeight: '1.4' }}>
+                          Waiting for portal issuance form to render on the browser. Real field mappings will populate dynamically via Groq LLM as soon as elements appear.
+                        </p>
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 {/* Quick Edit Citizen Details in Step 4 */}
@@ -3366,15 +3929,15 @@ const App: React.FC = () => {
                     <span className="light max" />
                   </div>
 
-                  {/* Mode switcher: Interactive vs Screenshot */}
+                  {/* Mode switcher: Real Website vs Screenshot vs Simulated Fallback */}
                   <div className="portal-view-toggle">
                     <button
                       type="button"
-                      className={`portal-toggle-btn ${portalViewMode === 'interactive' ? 'active' : ''}`}
-                      onClick={() => setPortalViewMode('interactive')}
-                      title="Directly interact with and fill the official portal form"
+                      className={`portal-toggle-btn ${portalViewMode === 'live' ? 'active' : ''}`}
+                      onClick={() => setPortalViewMode('live')}
+                      title="Open and work on the real official government portal"
                     >
-                      ⚡ Interactive Form
+                      🌐 Real Website (Live)
                     </button>
                     <button
                       type="button"
@@ -3383,6 +3946,14 @@ const App: React.FC = () => {
                       title="View the raw Playwright browser viewport screenshot"
                     >
                       📸 Live Screenshot
+                    </button>
+                    <button
+                      type="button"
+                      className={`portal-toggle-btn ${portalViewMode === 'interactive' ? 'active' : ''}`}
+                      onClick={() => setPortalViewMode('interactive')}
+                      title="View simulated fallback form"
+                    >
+                      ⚡ Simulated Fallback
                     </button>
                   </div>
 
@@ -3409,7 +3980,17 @@ const App: React.FC = () => {
                         PORTAL SIGN-IN GATEWAY
                       </div>
                     )}
-                    <a
+                    <button
+                        type="button"
+                        className="gemini-btn gemini-btn-primary"
+                        style={{ fontSize: '0.76rem', padding: '0.25rem 0.65rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}
+                        onClick={() => openRealWebsiteSideBySide(currentPortalUrl)}
+                        title="Open real official website docked on the right side of your screen"
+                      >
+                        <span>🚀</span>
+                        <span>Open Side-by-Side</span>
+                      </button>
+                      <a
                       href={currentPortalUrl}
                       target="_blank"
                       rel="noopener noreferrer"
@@ -3429,6 +4010,132 @@ const App: React.FC = () => {
                         alt="Portal Live Screenshot"
                         style={{ width: '100%', borderRadius: '4px', boxShadow: '0 4px 16px rgba(0,0,0,0.1)' }}
                       />
+                    </div>
+                  ) : portalViewMode === 'live' ? (
+                    <div style={{ padding: '2rem 1.5rem', textAlign: 'center' }}>
+                      <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.55rem', background: 'rgba(16, 185, 129, 0.12)', border: '1px solid rgba(16, 185, 129, 0.35)', borderRadius: '24px', padding: '0.4rem 1.1rem', color: '#34d399', fontSize: '0.85rem', fontWeight: 600, marginBottom: '1.25rem' }}>
+                        <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: '#10b981' }} />
+                        OFFICIAL GOVERNMENT PORTAL CONNECTED
+                      </div>
+
+                      <h2 style={{ fontSize: '1.5rem', fontWeight: 700, color: '#f8fafc', marginBottom: '0.4rem' }}>
+                        {currentPortalName}
+                      </h2>
+                      <div style={{ fontFamily: 'monospace', fontSize: '0.92rem', color: '#38bdf8', marginBottom: '1.25rem', wordBreak: 'break-all' }}>
+                        {currentPortalUrl}
+                      </div>
+
+                      <p style={{ color: '#94a3b8', fontSize: '0.88rem', maxWidth: '580px', margin: '0 auto 1.5rem', lineHeight: '1.6' }}>
+                        Work directly on the real official website with real OTP SMS, live government authentication, and real-time submission.
+                      </p>
+
+                      <div style={{ display: 'flex', justifyContent: 'center', gap: '0.85rem', flexWrap: 'wrap', marginBottom: '2rem' }}>
+                        <button
+                          type="button"
+                          className="gemini-btn gemini-btn-primary"
+                          style={{ fontSize: '1rem', padding: '0.75rem 1.6rem', display: 'flex', alignItems: 'center', gap: '0.6rem', boxShadow: '0 4px 20px rgba(56, 189, 248, 0.3)' }}
+                          onClick={() => openRealWebsiteSideBySide(currentPortalUrl)}
+                        >
+                          <span>🚀</span>
+                          <span>{isDigilocker ? 'Open DigiLocker Sign In (/web/login)' : 'Open Real Website on Side (Split Screen)'}</span>
+                        </button>
+                        {isDigilocker && (
+                          <button
+                            type="button"
+                            className="gemini-btn gemini-btn-primary"
+                            style={{ fontSize: '1rem', padding: '0.75rem 1.4rem', display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)' }}
+                            onClick={() => openRealWebsiteSideBySide('https://www.digilocker.gov.in/web/signup')}
+                          >
+                            <span>📝</span>
+                            <span>Open DigiLocker Sign Up (/web/signup)</span>
+                          </button>
+                        )}
+                        <a
+                          href={currentPortalUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="gemini-btn gemini-btn-tonal"
+                          style={{ fontSize: '0.95rem', padding: '0.75rem 1.3rem', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+                        >
+                          <span>↗</span>
+                          <span>Open in Full Tab</span>
+                        </a>
+                      </div>
+
+                      {/* Autonomous Automation & Testing Sandbox Card */}
+                      <div style={{ background: 'rgba(255, 255, 255, 0.03)', border: '1px solid rgba(255, 255, 255, 0.08)', borderRadius: '14px', padding: '1.25rem', maxWidth: '640px', margin: '0 auto', textAlign: 'left' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                            <span style={{ fontSize: '1.1rem' }}>⚡</span>
+                            <span style={{ fontWeight: 700, fontSize: '0.92rem', color: '#f8fafc' }}>
+                              Autonomous Execution Pipeline & Sandbox
+                            </span>
+                          </div>
+                          <span style={{ fontSize: '0.72rem', color: '#10b981', background: 'rgba(16, 185, 129, 0.1)', padding: '0.2rem 0.6rem', borderRadius: '12px' }}>
+                            Live Playwright Chromium
+                          </span>
+                        </div>
+
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem', marginBottom: '1.25rem' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', background: 'rgba(255, 255, 255, 0.02)', padding: '0.5rem 0.8rem', borderRadius: '8px', border: '1px solid rgba(255, 255, 255, 0.05)' }}>
+                            <span style={{ color: '#10b981', fontWeight: 700 }}>1</span>
+                            <div style={{ flex: 1, fontSize: '0.82rem', color: '#cbd5e1' }}>
+                              <strong>Portal Login:</strong> Open portal, citizen signs in via Mobile/Aadhaar OTP
+                            </div>
+                            <span style={{ fontSize: '0.7rem', color: agentStatus === 'awaiting_login' ? '#38bdf8' : '#94a3b8' }}>
+                              {agentStatus === 'awaiting_login' ? '● Active' : 'Step 1'}
+                            </span>
+                          </div>
+
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', background: 'rgba(255, 255, 255, 0.02)', padding: '0.5rem 0.8rem', borderRadius: '8px', border: '1px solid rgba(255, 255, 255, 0.05)' }}>
+                            <span style={{ color: '#10b981', fontWeight: 700 }}>2</span>
+                            <div style={{ flex: 1, fontSize: '0.82rem', color: '#cbd5e1' }}>
+                              <strong>Autonomous Deep Navigation:</strong> Agent routes to APAAR form & visibly selects academic dropdowns
+                            </div>
+                            <span style={{ fontSize: '0.7rem', color: agentRunning ? '#38bdf8' : '#94a3b8' }}>
+                              {agentRunning ? '● Executing' : 'Step 2'}
+                            </span>
+                          </div>
+
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', background: 'rgba(255, 255, 255, 0.02)', padding: '0.5rem 0.8rem', borderRadius: '8px', border: '1px solid rgba(255, 255, 255, 0.05)' }}>
+                            <span style={{ color: '#f59e0b', fontWeight: 700 }}>3</span>
+                            <div style={{ flex: 1, fontSize: '0.82rem', color: '#cbd5e1' }}>
+                              <strong>Human-in-the-Loop Checkpoint:</strong> Agent pauses for you to pick your specific School/Board
+                            </div>
+                            <span style={{ fontSize: '0.7rem', color: agentStatus === 'awaiting_user_selection' ? '#f59e0b' : '#94a3b8' }}>
+                              {agentStatus === 'awaiting_user_selection' ? '● Checkpoint' : 'Step 3'}
+                            </span>
+                          </div>
+
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', background: 'rgba(255, 255, 255, 0.02)', padding: '0.5rem 0.8rem', borderRadius: '8px', border: '1px solid rgba(255, 255, 255, 0.05)' }}>
+                            <span style={{ color: '#10b981', fontWeight: 700 }}>4</span>
+                            <div style={{ flex: 1, fontSize: '0.82rem', color: '#cbd5e1' }}>
+                              <strong>Sovereign Pre-Submit Review:</strong> Checks consent, illuminates submit button in green & safely stops
+                            </div>
+                            <span style={{ fontSize: '0.7rem', color: agentStatus === 'ready_to_submit' || submitted ? '#10b981' : '#94a3b8' }}>
+                              {agentStatus === 'ready_to_submit' || submitted ? '● Completed' : 'Step 4'}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* 1-Click Interactive Mock Sandbox Test Button */}
+                        <div style={{ borderTop: '1px solid rgba(255, 255, 255, 0.08)', paddingTop: '0.85rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
+                          <span style={{ fontSize: '0.76rem', color: '#94a3b8' }}>
+                            Want to test the full automated dropdown flow instantly?
+                          </span>
+                          <button
+                            type="button"
+                            className="gemini-btn gemini-btn-primary"
+                            style={{ fontSize: '0.82rem', padding: '0.4rem 0.9rem', background: 'linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)' }}
+                            onClick={() => {
+                              showToast('Launching Playwright on APAAR Safe Simulator Sandbox...', 'info');
+                              handleStartAgent('http://localhost:8000/portal/digilocker_apaar_mock');
+                            }}
+                          >
+                            🧪 Test on APAAR Simulator
+                          </button>
+                        </div>
+                      </div>
                     </div>
                   ) : dynamicBlueprint?.is_reachable === false ? (
                     <div style={{ padding: '3rem 2rem', textAlign: 'center', background: 'rgba(15, 23, 42, 0.85)', borderRadius: '16px', border: '1px solid rgba(239, 68, 68, 0.35)', margin: '1rem' }}>

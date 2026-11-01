@@ -354,15 +354,30 @@ SERVICE_RULES: dict[str, dict] = {
         ],
     },
     "digilocker": {
-        "name": "DigiLocker — National Digital Document Wallet & Sign-up",
+        "name": "DigiLocker - National Digital Document Wallet",
         "portal_name": "DigiLocker Official Portal (MeitY)",
-        "portal_url": "https://www.digilocker.gov.in/",
+        "portal_url": "https://www.digilocker.gov.in/web/login",
         "category": "general",
         "rules": [
             (
                 _rule_required_fields,
                 {
                     "fields": ["full_name", "mobile_number"],
+                },
+            ),
+        ],
+    },
+    "digilocker_apaar": {
+        "name": "DigiLocker - APAAR ID / ABC ID Issuance",
+        "portal_name": "DigiLocker (Academic Bank of Credits / Ministry of Education)",
+        "portal_url": "https://www.digilocker.gov.in/web/login",
+        "category": "education",
+        "rules": [
+            (
+                _rule_required_fields,
+                {
+                    "fields": ["full_name"],
+                    "description": "Applicant full legal name is required for APAAR student registry.",
                 },
             ),
         ],
@@ -536,6 +551,15 @@ _SERVICE_ALIASES: dict[str, str] = {
     "digi_locker": "digilocker",
     "digi-locker": "digilocker",
     "digital_locker": "digilocker",
+    "apaar": "digilocker_apaar",
+    "apaar_id": "digilocker_apaar",
+    "apaar-id": "digilocker_apaar",
+    "apaar id": "digilocker_apaar",
+    "abc_id": "digilocker_apaar",
+    "abc-id": "digilocker_apaar",
+    "abc id": "digilocker_apaar",
+    "academic_bank_of_credits": "digilocker_apaar",
+    "digilocker_apaar": "digilocker_apaar",
 }
 
 
@@ -660,7 +684,12 @@ _INTENT_KEYWORD_MAP: dict[str, dict] = {
         "default_docs": ["income_certificate", "aadhaar"],
         "description": "Matched construction / unorganized labour welfare certificate (Service 1784).",
     },
-    "digilocker": {
+    "digilocker_apaar": {
+                "reason": "Academic Bank of Credits (ABC) & APAAR ID are officially issued under DigiLocker by Ministry of Education.",
+                "fields": ["Full Name", "Date of Birth", "Gender", "Identity Type", "Identity Value", "Admission Year", "Institution Name"],
+                "limitations": "Zero document upload portal. Human-in-the-Loop selection required for issuing institution/board.",
+            },
+            "digilocker": {
         "keywords": [
             "digilocker", "digi locker", "digital locker", "create digilocker",
             "digilocker account", "digilocker registration", "digilocker signup",
@@ -724,7 +753,8 @@ CRITICAL ANTI-HALLUCINATION RULES FOR OFFICIAL PORTAL URLS:
 - National Scholarship Portal (NSP): "https://scholarships.gov.in/" (Registration: "https://scholarships.gov.in/fresh/newstdRegfrmInstruction", Login: "https://scholarships.gov.in/renew/loginPage"). NEVER combine with other names like 'scholarships.gov.in/vidyalakshmi'!
 - Vidya Lakshmi: "https://www.vidyalakshmi.co.in/Students/login" (Registration: "https://www.vidyalakshmi.co.in/Students/signup").
 - ServicePlus (BOCW / Welfare / Form 1784): "https://serviceonline.gov.in/citizenRegistration.html" (Login: "https://serviceonline.gov.in/login.do").
-- DigiLocker: "https://www.digilocker.gov.in/signin" (Registration: "https://www.digilocker.gov.in/dashboard/registration").
+- DigiLocker: "https://www.digilocker.gov.in/web/login" (Registration: "https://www.digilocker.gov.in/web/signup").
+- DigiLocker APAAR / ABC ID Issuance: For APAAR ID, ABC ID, or student cards on DigiLocker, set matched_service_id to "digilocker_apaar", portal_url to "https://www.digilocker.gov.in/web/login", category to "education", suggested_documents to [], and requires_login to true.
 - PM-KISAN: "https://pmkisan.gov.in/".
 - Never invent domains like 'cwws.gov.in'. Always output real official government portals.
 

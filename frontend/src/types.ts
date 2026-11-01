@@ -110,11 +110,14 @@ export interface EligibilityResponse {
  */
 export interface ApplyStartResponse {
   session_id: string;
-  status: 'running' | 'awaiting_captcha' | 'submitted' | 'failed';
+  status: 'running' | 'awaiting_captcha' | 'submitted' | 'failed' | 'awaiting_login' | 'awaiting_user_selection' | 'ready_to_submit';
   message: string;
   captcha_image_b64?: string;
   page_preview_b64?: string;
   log_steps?: string[];
+  steps_completed?: string[];
+  action_plan?: any[];
+  detected_fields?: any[];
 }
 
 /**
@@ -123,10 +126,12 @@ export interface ApplyStartResponse {
  */
 export interface ApplyResumeResponse {
   session_id: string;
-  status: 'running' | 'awaiting_captcha' | 'submitted' | 'failed';
+  status: 'running' | 'awaiting_captcha' | 'submitted' | 'failed' | 'awaiting_login' | 'awaiting_user_selection' | 'ready_to_submit';
   message: string;
   tracking_receipt?: string;
   final_screenshot_b64?: string;
+  steps_completed?: string[];
+  action_plan?: any[];
 }
 
 /**
