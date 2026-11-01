@@ -1475,8 +1475,37 @@ const App: React.FC = () => {
       return;
     }
     try {
-      const targetServiceId = selectedService?.service_id || profile.target_service_id || '1784';
-      const resp = await checkEligibility(profile, targetServiceId);
+      // 1. Sync any values entered in dynamic DOM portal inputs directly into citizen profile
+      const activeProfile = { ...profile };
+      for (const [sel, val] of Object.entries(dynamicFormValues)) {
+        if (!val) continue;
+        const s = sel.toLowerCase();
+        const strVal = String(val).trim();
+        if (s.includes('email') && !activeProfile.email) activeProfile.email = strVal;
+        if (s.includes('name') && !s.includes('father') && !activeProfile.full_name) activeProfile.full_name = strVal;
+        if (s.includes('father') && !activeProfile.father_or_guardian_name) activeProfile.father_or_guardian_name = strVal;
+        if ((s.includes('mobile') || s.includes('phone')) && !activeProfile.mobile_number) activeProfile.mobile_number = strVal.replace(/\D/g, '').slice(0, 10);
+        if (s.includes('state') && !activeProfile.state) activeProfile.state = strVal;
+        if ((s.includes('pin') || s.includes('postal')) && !activeProfile.pincode) activeProfile.pincode = strVal.replace(/\D/g, '').slice(0, 6);
+      }
+      if (dynamicBlueprint?.fields) {
+        for (const f of dynamicBlueprint.fields) {
+          const val = dynamicFormValues[f.selector];
+          if (!val) continue;
+          const lbl = (f.label || '').toLowerCase();
+          const strVal = String(val).trim();
+          if (lbl.includes('email') && !activeProfile.email) activeProfile.email = strVal;
+          if (lbl.includes('name') && !lbl.includes('father') && !activeProfile.full_name) activeProfile.full_name = strVal;
+          if (lbl.includes('father') && !activeProfile.father_or_guardian_name) activeProfile.father_or_guardian_name = strVal;
+          if ((lbl.includes('mobile') || lbl.includes('phone')) && !activeProfile.mobile_number) activeProfile.mobile_number = strVal.replace(/\D/g, '').slice(0, 10);
+          if (lbl.includes('state') && !activeProfile.state) activeProfile.state = strVal;
+          if ((lbl.includes('pin') || lbl.includes('postal')) && !activeProfile.pincode) activeProfile.pincode = strVal.replace(/\D/g, '').slice(0, 6);
+        }
+      }
+      setProfile(activeProfile);
+
+      const targetServiceId = selectedService?.service_id || activeProfile.target_service_id || '1784';
+      const resp = await checkEligibility(activeProfile, targetServiceId);
       setEligibility(resp);
       showToast(`Verification complete for ${resp.service_name || selectedService?.service_name || 'Registration'}!`, 'success');
       if (resp.eligible) {
@@ -2821,6 +2850,26 @@ const App: React.FC = () => {
                               );
                             }
 
+                            const handleDynamicFieldChange = (val: any) => {
+                              setDynamicFormValues(prev => ({ ...prev, [sel]: val }));
+                              const lbl = (field.label || '').toLowerCase();
+                              const s = sel.toLowerCase();
+                              const strVal = String(val || '').trim();
+                              if (lbl.includes('email') || s.includes('email')) {
+                                setProfile(p => ({ ...p, email: strVal }));
+                              } else if ((lbl.includes('name') && !lbl.includes('father')) || (s.includes('name') && !s.includes('father'))) {
+                                setProfile(p => ({ ...p, full_name: strVal }));
+                              } else if (lbl.includes('father') || s.includes('father')) {
+                                setProfile(p => ({ ...p, father_or_guardian_name: strVal }));
+                              } else if (lbl.includes('mobile') || lbl.includes('phone') || s.includes('mobile')) {
+                                setProfile(p => ({ ...p, mobile_number: strVal.replace(/\D/g, '').slice(0, 10) }));
+                              } else if (lbl.includes('state') || s.includes('state')) {
+                                setProfile(p => ({ ...p, state: strVal }));
+                              } else if (lbl.includes('pin') || s.includes('pin') || lbl.includes('postal')) {
+                                setProfile(p => ({ ...p, pincode: strVal.replace(/\D/g, '').slice(0, 6) }));
+                              }
+                            };
+
                             if (field.tag === 'select' || (field.options && field.options.length > 0)) {
                               return (
                                 <div key={idx} className="dynamic-field-item">
@@ -2830,7 +2879,7 @@ const App: React.FC = () => {
                                   <select
                                     className="gemini-input"
                                     value={String(currentVal || '')}
-                                    onChange={(e) => setDynamicFormValues(prev => ({ ...prev, [sel]: e.target.value }))}
+                                    onChange={(e) => handleDynamicFieldChange(e.target.value)}
                                   >
                                     <option value="">-- Select Option --</option>
                                     {(field.options || []).map((opt) => (
@@ -2851,7 +2900,7 @@ const App: React.FC = () => {
                                   type={field.type || 'text'}
                                   value={String(currentVal || '')}
                                   placeholder={field.label}
-                                  onChange={(e) => setDynamicFormValues(prev => ({ ...prev, [sel]: e.target.value }))}
+                                  onChange={(e) => handleDynamicFieldChange(e.target.value)}
                                 />
                               </div>
                             );

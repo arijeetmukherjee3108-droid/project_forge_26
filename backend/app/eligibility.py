@@ -384,11 +384,8 @@ SERVICE_RULES: dict[str, dict] = {
                     "fields": [
                         "full_name",
                         "mobile_number",
-                        "email",
                         "state",
-                        "district",
                     ],
-                    # ASSUMPTION: verify against the official form/guidelines
                 },
             ),
         ],
