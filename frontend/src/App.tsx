@@ -497,6 +497,52 @@ const getRelevantFieldsForService = (
   );
 };
 
+export const isDocumentUploadRequired = (
+  target?: IntentClassificationResponse | null,
+  blueprint?: DynamicScanResponse | null
+): boolean => {
+  if (!target) return true;
+
+  const sid = (target.service_id || '').toLowerCase();
+  const sname = (target.service_name || '').toLowerCase();
+  const pid = (target.portal_id || '').toLowerCase();
+
+  // Services known to require zero file uploads (e.g. DigiLocker, basic portal user registrations, voter searches)
+  if (
+    sid.includes('digilocker') ||
+    sname.includes('digilocker') ||
+    pid.includes('digilocker')
+  ) {
+    return false;
+  }
+
+  // If dynamic blueprint was scanned from DOM:
+  if (blueprint && Array.isArray(blueprint.fields) && blueprint.fields.length > 0) {
+    const hasFileField = blueprint.fields.some(
+      (f) => f.type === 'file' || /upload|attach|document|file|certificate|दस्तावेज़/i.test(f.label || '')
+    );
+    const hasRequiredDocsMeta = Boolean(
+      blueprint.required_documents_meta && blueprint.required_documents_meta.length > 0
+    );
+    // If portal DOM was scanned and contains NO file inputs or doc meta, no upload is needed
+    if (!hasFileField && !hasRequiredDocsMeta) {
+      return false;
+    }
+  }
+
+  const docs = target.required_documents || [];
+  if (docs.length === 0) {
+    return false;
+  }
+
+  // Filter out dummy values like "none", "not required", "nil", "n/a"
+  const validDocs = docs.filter(
+    (d) => d && !/^(none|nil|null|not\s*required|no\s*doc.*|na|n\/a)$/i.test(d.trim())
+  );
+
+  return validDocs.length > 0;
+};
+
 const App: React.FC = () => {
   const [currentStep, setCurrentStep] = useState(1);
   const [activeMode, setActiveMode] = useState<'apply' | 'eligibility'>('apply');
@@ -513,6 +559,7 @@ const App: React.FC = () => {
   const [isClassifying, setIsClassifying] = useState(false);
   const [showSchemePicker, setShowSchemePicker] = useState(false);
   const [isNavigatingToDocs, setIsNavigatingToDocs] = useState(false);
+  const [docStepSkipped, setDocStepSkipped] = useState(false);
   const [navStepText, setNavStepText] = useState('');
 
   // Task 3: Zero-Shot Dynamic DOM Reasoner state
@@ -657,25 +704,30 @@ const App: React.FC = () => {
   };
 
   // Step Completion Validation (Gates)
+  const isDocRequired = isDocumentUploadRequired(selectedService, dynamicBlueprint);
   const hasExtractedDocument = Boolean(
     extraction !== null || (profile.source_documents && profile.source_documents.length > 0)
   );
   const isStep1Done = Boolean(selectedService !== null || intent.trim().length > 0);
-  const isStep2Done = Boolean(hasExtractedDocument);
+  const isStep2Done = Boolean(!isDocRequired || docStepSkipped || hasExtractedDocument);
   const isStep3Done = Boolean(verified);
 
   const canNavigateToStep = (stepNumber: number) => {
     if (stepNumber === 1) return true;
-    if (stepNumber === 2) return isStep1Done;
+    if (stepNumber === 2) return isStep1Done && isDocRequired;
     if (stepNumber === 3) return isStep1Done && isStep2Done;
     if (stepNumber === 4) return isStep1Done && isStep2Done && isStep3Done;
     return false;
   };
 
   const handleStepClick = (targetStep: number) => {
+    if (targetStep === 2 && !isDocRequired) {
+      showToast('No documents required for this service. You are already in the verification step.', 'info');
+      return;
+    }
     if (!canNavigateToStep(targetStep)) {
       if (targetStep === 2) showToast('Please enter your intent or select a service first', 'error');
-      else if (targetStep === 3) showToast('Please upload and extract your required document in Step 2 first', 'error');
+      else if (targetStep === 3) showToast('Please upload required document or choose manual entry', 'error');
       else if (targetStep === 4) showToast('Please verify your citizen data before proceeding to Live Agent', 'error');
       return;
     }
@@ -780,18 +832,60 @@ const App: React.FC = () => {
       else setVaultQuery(target.required_documents[0]);
     }
 
+    let scannedBlueprint: DynamicScanResponse | null = null;
     try {
       const isKnownFastPath = target.service_id === '1784' || target.service_id === 'vidyalakshmi' || target.service_id === 'citizen_registration';
       if (!isKnownFastPath && (target.portal_url || target.service_id)) {
         setNavStepText(`AI Form Agent is scanning live portal DOM and discovering required fields & upload slots...`);
-        await scanPortal(target.portal_url || target.service_id);
+        scannedBlueprint = await scanPortal(target.portal_url || target.service_id);
       }
+
+      // Zero-upload gate: If service requires no documents, bypass Step 2 directly to Step 3
+      const needsDocs = isDocumentUploadRequired(target, scannedBlueprint || dynamicBlueprint);
+      if (!needsDocs) {
+        setDocStepSkipped(true);
+        setNavStepText(`No document uploads needed for ${target.service_name}. Opening Verification...`);
+        setExtraction({
+          profile: {
+            ...profile,
+            state: profile.state || 'Uttar Pradesh',
+            gender: profile.gender || 'male',
+            category: profile.category || 'general',
+          },
+          uncertain_fields: [],
+          raw_text_preview: `Direct Verification Mode: No file upload is required for ${target.service_name}. Citizen details are verified directly on screen.`,
+          message: `No document upload required for this process. Review and verify citizen details.`,
+        });
+        await new Promise((r) => setTimeout(r, 600));
+        setCurrentStep(3);
+        showToast(`⚡ No document upload required for ${target.service_name}. Proceeding directly to Step 3 Verification!`, 'info');
+        return;
+      }
+
       setNavStepText(`Application pipeline prepared! Opening Document Hub...`);
       await new Promise((r) => setTimeout(r, 600));
       setCurrentStep(2);
     } catch (err) {
       console.warn('Navigation scan error:', err);
-      setCurrentStep(2);
+      const needsDocs = isDocumentUploadRequired(target, null);
+      if (!needsDocs) {
+        setDocStepSkipped(true);
+        setExtraction({
+          profile: {
+            ...profile,
+            state: profile.state || 'Uttar Pradesh',
+            gender: profile.gender || 'male',
+            category: profile.category || 'general',
+          },
+          uncertain_fields: [],
+          raw_text_preview: `Direct Verification Mode: No file upload is required for ${target.service_name}.`,
+          message: `No document upload required. Review and verify details below.`,
+        });
+        setCurrentStep(3);
+        showToast(`⚡ No document upload required. Proceeding directly to Step 3 Verification!`, 'info');
+      } else {
+        setCurrentStep(2);
+      }
     } finally {
       setIsNavigatingToDocs(false);
       setNavStepText('');
@@ -1541,15 +1635,21 @@ const App: React.FC = () => {
           <nav className="gemini-stepper">
             {STEPS.map((s) => {
               const accessible = canNavigateToStep(s.num);
+              let label = s.label;
+              if (s.num === 2 && !isDocRequired) {
+                label = 'Documents (Not Needed)';
+              }
+              const isCompleted = currentStep > s.num || (s.num === 2 && !isDocRequired && currentStep >= 3);
               return (
                 <button
                   key={s.num}
-                  className={`stepper-chip ${currentStep === s.num ? 'active' : ''} ${currentStep > s.num ? 'completed' : ''} ${!accessible ? 'is-disabled' : ''}`}
-                  disabled={!accessible}
+                  className={`stepper-chip ${currentStep === s.num ? 'active' : ''} ${isCompleted ? 'completed' : ''} ${!accessible && !(s.num === 2 && !isDocRequired) ? 'is-disabled' : ''}`}
+                  disabled={!accessible && !(s.num === 2 && !isDocRequired)}
                   onClick={() => handleStepClick(s.num)}
+                  title={s.num === 2 && !isDocRequired ? 'No document upload required for this service' : undefined}
                 >
-                  <span>{currentStep > s.num ? '✓' : s.num}.</span>
-                  <span>{s.label}</span>
+                  <span>{isCompleted ? '✓' : s.num}.</span>
+                  <span>{label}</span>
                 </button>
               );
             })}
@@ -1818,7 +1918,7 @@ const App: React.FC = () => {
                                       </>
                                     ) : (
                                       <>
-                                        <span>{msg.schemeMatch.cta_message || 'Proceed to Document Hub'}</span>
+                                        <span>{msg.schemeMatch.cta_message || (!isDocumentUploadRequired(msg.schemeMatch) ? 'Proceed to Verification (No Docs Needed)' : 'Proceed to Document Hub')}</span>
                                         <span>→</span>
                                       </>
                                     )}
@@ -2143,7 +2243,7 @@ const App: React.FC = () => {
               </div>
 
               {/* Extracted Document Preview Card (Only shown once document is uploaded & extracted) */}
-              {isStep2Done ? (
+              {hasExtractedDocument ? (
                 <div style={{ marginTop: '1.5rem', background: 'rgba(56, 189, 248, 0.05)', border: '1px solid rgba(56, 189, 248, 0.25)', borderRadius: '12px', padding: '1.25rem' }}>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.85rem' }}>
                     <div style={{ fontWeight: 700, fontSize: '0.92rem', color: '#f8fafc' }}>
@@ -2225,11 +2325,22 @@ const App: React.FC = () => {
                 <div style={{ marginTop: '1.25rem', padding: '1.1rem 1.25rem', background: 'rgba(255, 255, 255, 0.02)', borderRadius: '10px', border: '1px dashed rgba(56, 189, 248, 0.3)', textAlign: 'center' }}>
                   <div style={{ color: '#38bdf8', fontSize: '0.88rem', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', marginBottom: '0.35rem' }}>
                     <span>🔒</span>
-                    <span>Document Upload Required for Step 3</span>
+                    <span>Document Upload Recommended</span>
                   </div>
-                  <div style={{ color: '#94a3b8', fontSize: '0.8rem' }}>
-                    Please upload your required document above and click <strong>Extract Details</strong> (or auto-fetch via Google Vault) to extract your profile and proceed to verification.
+                  <div style={{ color: '#94a3b8', fontSize: '0.8rem', marginBottom: '0.85rem' }}>
+                    Upload your document above and click <strong>Extract Details</strong> (or auto-fetch via Google Vault) to auto-fill your citizen profile, or skip to enter details manually.
                   </div>
+                  <button
+                    type="button"
+                    className="gemini-btn gemini-btn-tonal"
+                    style={{ fontSize: '0.8rem', padding: '0.45rem 1rem' }}
+                    onClick={() => {
+                      setDocStepSkipped(true);
+                      handleProceedManually();
+                    }}
+                  >
+                    <span>Skip Upload & Verify Details Manually →</span>
+                  </button>
                 </div>
               )}
             </div>
@@ -2299,6 +2410,45 @@ const App: React.FC = () => {
                 <p className="card-desc">
                   Review and verify your citizen profile details below. You can edit any value before proceeding with the application.
                 </p>
+
+                {/* Live DOM Distillation Badge / Form Origin Indicator */}
+                <div style={{ marginBottom: '1.25rem' }}>
+                  {genuineDynamicFields.length > 0 ? (
+                    <div style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.65rem',
+                      background: 'rgba(56, 189, 248, 0.08)',
+                      border: '1px solid rgba(56, 189, 248, 0.25)',
+                      borderRadius: '10px',
+                      padding: '0.6rem 0.95rem',
+                      fontSize: '0.82rem',
+                      color: '#38bdf8',
+                    }}>
+                      <span style={{ fontSize: '1.1rem' }}>⚡</span>
+                      <div>
+                        <strong>In-Browser DOM Reader Active:</strong> {genuineDynamicFields.length} interactive form fields and dropdowns distilled directly from live portal DOM (<code>{dynamicBlueprint?.portal_url || selectedService?.portal_url || 'gov.in'}</code>).
+                      </div>
+                    </div>
+                  ) : (
+                    <div style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.65rem',
+                      background: 'rgba(255, 255, 255, 0.03)',
+                      border: '1px solid rgba(255, 255, 255, 0.08)',
+                      borderRadius: '10px',
+                      padding: '0.6rem 0.95rem',
+                      fontSize: '0.82rem',
+                      color: '#94a3b8',
+                    }}>
+                      <span style={{ fontSize: '1.1rem' }}>🏛️</span>
+                      <div>
+                        <strong>Scheme Form Fields:</strong> Portal registration fields verified below. The AI Browser Agent will navigate to <code>{selectedService?.portal_url || 'official portal'}</code> and inject these verified values live in Step 4.
+                      </div>
+                    </div>
+                  )}
+                </div>
 
                 {/* ─── CASE 1: VIDYA LAKSHMI STUDENT LAYOUT ─── */}
                 {isVidyaLakshmi ? (
@@ -2653,7 +2803,16 @@ const App: React.FC = () => {
                 </div>
 
                 <div className="action-buttons-row">
-                  <button className="gemini-btn gemini-btn-tonal" onClick={() => setCurrentStep(2)}>
+                  <button
+                    className="gemini-btn gemini-btn-tonal"
+                    onClick={() => {
+                      if (!isDocRequired || docStepSkipped) {
+                        setCurrentStep(1);
+                      } else {
+                        setCurrentStep(2);
+                      }
+                    }}
+                  >
                     ← Back
                   </button>
                   <button

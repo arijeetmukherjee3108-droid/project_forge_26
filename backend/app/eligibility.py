@@ -337,6 +337,20 @@ SERVICE_RULES: dict[str, dict] = {
             ),
         ],
     },
+    "digilocker": {
+        "name": "DigiLocker — National Digital Document Wallet & Sign-up",
+        "portal_name": "DigiLocker Official Portal (MeitY)",
+        "portal_url": "https://www.digilocker.gov.in/",
+        "category": "general",
+        "rules": [
+            (
+                _rule_required_fields,
+                {
+                    "fields": ["full_name", "mobile_number"],
+                },
+            ),
+        ],
+    },
     "citizen_registration": {
         # ServicePlus Citizen Registration
         "name": "ServicePlus Citizen Self-Registration",
@@ -507,6 +521,9 @@ _SERVICE_ALIASES: dict[str, str] = {
     "service_plus_registration": "citizen_registration",
     "serviceplus_registration": "citizen_registration",
     "serviceplus": "citizen_registration",
+    "digi_locker": "digilocker",
+    "digi-locker": "digilocker",
+    "digital_locker": "digilocker",
 }
 
 
@@ -631,6 +648,15 @@ _INTENT_KEYWORD_MAP: dict[str, dict] = {
         "default_docs": ["income_certificate", "aadhaar"],
         "description": "Matched construction / unorganized labour welfare certificate (Service 1784).",
     },
+    "digilocker": {
+        "keywords": [
+            "digilocker", "digi locker", "digital locker", "create digilocker",
+            "digilocker account", "digilocker registration", "digilocker signup",
+            "digi-locker", "digi loker",
+        ],
+        "default_docs": [],
+        "description": "Matched DigiLocker citizen digital document wallet registration.",
+    },
     "citizen_registration": {
         "keywords": [
             "serviceplus", "service online", "create account", "new user",
@@ -666,6 +692,8 @@ Analyze the citizen's query in English, Hindi, or Hinglish, and determine the co
    - Prepare the application blueprint!
    - Set `message_type`: "ready_to_route".
    - Include exact `portal_name`, official `portal_url`, `reason_chosen`, `fields_to_fill`, `suggested_documents`, and `limitations`.
+   - IMPORTANT: If the process does NOT require document file uploads (e.g. DigiLocker account registration, basic citizen signup, voter search, status tracking), set `suggested_documents: []` and `cta_message: "Proceed to Verification"`.
+
 
 4. `scheme_info`: Citizen is exploring or asking questions about a scheme/exam ("Tell me about PMJAY / Ayushman Bharat", "What is PM-KISAN?", "What is JEE Main 2027?", "How to get income certificate in UP?"):
    - Provide comprehensive factual details in `ai_advice`: eligibility criteria, family income ceiling, key documents, and timeline.
@@ -889,6 +917,11 @@ def classify_citizen_intent(text: str) -> IntentClassifyResponse:
 
         # Curated fields and justifications for our known catalog
         catalog_metadata = {
+            "digilocker": {
+                "reason": "DigiLocker is the official flagship initiative under Digital India (MeitY) for paperless citizen document storage.",
+                "fields": ["Full Name", "Date of Birth", "Gender", "Mobile Number", "Security PIN (6 Digits)", "Email ID"],
+                "limitations": "100% online instant registration with mobile OTP validation; no document file uploads required.",
+            },
             "citizen_registration": {
                 "reason": "National ServicePlus (NIC) is the designated single-window portal for citizen self-registration across central & state services.",
                 "fields": ["Full Name", "Email Address", "Mobile Number", "Password", "State Domicile"],

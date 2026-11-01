@@ -108,6 +108,17 @@ export const KNOWN_SERVICES_CATALOG: IntentClassificationResponse[] = [
     confidence: 0.88,
     description: 'Universal unified digital portal for applying to state certificates (income, caste, domicile) and citizen welfare schemes.',
   },
+  {
+    service_id: 'digilocker',
+    service_name: 'DigiLocker — National Digital Document Wallet & Citizen Sign-up',
+    portal_id: 'DIGILOCKER_PORTAL',
+    portal_name: 'DigiLocker Official Portal (MeitY)',
+    portal_url: 'https://www.digilocker.gov.in/',
+    category: 'general',
+    required_documents: [],
+    confidence: 0.98,
+    description: 'Direct citizen sign-up for DigiLocker wallet. 100% online registration without document upload.',
+  },
 ];
 
 /**
@@ -116,6 +127,11 @@ export const KNOWN_SERVICES_CATALOG: IntentClassificationResponse[] = [
  */
 export const matchIntentFallback = (query: string): IntentClassificationResponse => {
   const q = (query || '').toLowerCase().trim();
+
+  // DigiLocker Citizen Sign-up (Zero document upload needed)
+  if (/digilocker|digi\s*locker|digital\s*locker/i.test(q)) {
+    return KNOWN_SERVICES_CATALOG.find((k) => k.service_id === 'digilocker') || KNOWN_SERVICES_CATALOG[0];
+  }
 
   // Education & Scholarships
   if (/scholarship|vidya|lakshmi|loan|student|college|school|university|fees|study|matric|degree|education|btech|mbbs/i.test(q)) {
