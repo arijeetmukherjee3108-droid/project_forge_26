@@ -35,14 +35,39 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _API_KEY: str = os.getenv("GROQ_API_KEY", "")
-_PRIMARY_MODEL: str = os.getenv("GROQ_MODEL", "llama3-8b-8192")
-_FALLBACK_MODEL: str = os.getenv("GROQ_FALLBACK_MODEL", "llama3-70b-8192")
-_VISION_MODEL: str = os.getenv("GROQ_VISION_MODEL", "llava-v1.5-7b-4096-preview")
-_VISION_FALLBACK_MODEL: str = os.getenv("GROQ_VISION_FALLBACK_MODEL", "llava-v1.5-13b-4096-preview")
+_PRIMARY_MODEL: str = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
+_FALLBACK_MODEL: str = os.getenv("GROQ_FALLBACK_MODEL", "openai/gpt-oss-120b")
+_VISION_MODEL: str = os.getenv("GROQ_VISION_MODEL", "qwen/qwen3.8-27b")
+_VISION_FALLBACK_MODEL: str = os.getenv("GROQ_VISION_FALLBACK_MODEL", "qwen/qwen3.8-27b")
 
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+
+import re
+
+def _parse_raw_json(raw_text: str) -> dict:
+    if not raw_text:
+        return {}
+    cleaned = raw_text.strip()
+    try:
+        return json.loads(cleaned)
+    except Exception:
+        pass
+    m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", cleaned, re.DOTALL)
+    if m:
+        try:
+            return json.loads(m.group(1))
+        except Exception:
+            pass
+    m = re.search(r"(\{.*\})", cleaned, re.DOTALL)
+    if m:
+        try:
+            return json.loads(m.group(1))
+        except Exception:
+            pass
+    return {}
 
 
 def _call_model(client: Any, model: str, system_prompt: str, user_content: str) -> dict:
@@ -54,19 +79,38 @@ def _call_model(client: Any, model: str, system_prompt: str, user_content: str) 
     if "json" not in sys_prompt.lower() and "json" not in user_content.lower():
         sys_prompt += "\nYou must respond strictly with a valid JSON object."
 
-    response = client.chat.completions.create(
-        model=model,
-        messages=[
-            {"role": "system", "content": sys_prompt},
-            {"role": "user", "content": user_content},
-        ],
-        response_format={"type": "json_object"},
-        temperature=0.1,
-        timeout=25,
-        max_tokens=2048,
-    )
-    raw_text: str = response.choices[0].message.content or "{}"
-    return json.loads(raw_text)
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": sys_prompt},
+                {"role": "user", "content": user_content},
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.1,
+            timeout=25,
+            max_tokens=2048,
+        )
+        raw_text: str = response.choices[0].message.content or "{}"
+        return _parse_raw_json(raw_text)
+    except Exception as e:
+        # If server-side json_validate_failed occurred, retry without response_format
+        if "json_validate" in str(e).lower() or "400" in str(e):
+            response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": sys_prompt},
+                    {"role": "user", "content": user_content},
+                ],
+                temperature=0.1,
+                timeout=25,
+                max_tokens=2048,
+            )
+            raw_text = response.choices[0].message.content or "{}"
+            parsed = _parse_raw_json(raw_text)
+            if parsed:
+                return parsed
+        raise e
 
 
 def _call_model_vision(
@@ -80,8 +124,6 @@ def _call_model_vision(
     Make one Groq vision chat-completions call.
     Images are sent as base64 data URLs in the OpenAI image_url content format.
     Returns the parsed dict, or raises on any error (caller handles).
-
-    Groq vision: cap at 3 images per request to stay within limits.
     """
     content: list[dict] = [{"type": "text", "text": user_text}]
     for img_bytes in images[:3]:
@@ -91,19 +133,37 @@ def _call_model_vision(
             "image_url": {"url": f"data:image/png;base64,{b64}"},
         })
 
-    response = client.chat.completions.create(
-        model=model,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": content},
-        ],
-        response_format={"type": "json_object"},
-        temperature=0.1,
-        timeout=30,
-        max_tokens=2048,
-    )
-    raw_text: str = response.choices[0].message.content or "{}"
-    return json.loads(raw_text)
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": content},
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.1,
+            timeout=30,
+            max_tokens=2048,
+        )
+        raw_text: str = response.choices[0].message.content or "{}"
+        return _parse_raw_json(raw_text)
+    except Exception as e:
+        if "json_validate" in str(e).lower() or "400" in str(e):
+            response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": content},
+                ],
+                temperature=0.1,
+                timeout=30,
+                max_tokens=2048,
+            )
+            raw_text = response.choices[0].message.content or "{}"
+            parsed = _parse_raw_json(raw_text)
+            if parsed:
+                return parsed
+        raise e
 
 
 # ---------------------------------------------------------------------------

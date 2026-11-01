@@ -729,7 +729,7 @@ def _llm_classify_intent(raw_query: str) -> "IntentClassifyResponse | None":
         raw_sid = str(raw_data.get("matched_service_id") or "").strip()
         expl = str(raw_data.get("explanation") or f"AI matched intent to {raw_sid}." if raw_sid else "")
         raw_docs = raw_data.get("suggested_documents")
-        docs = [str(d) for d in raw_docs] if isinstance(raw_docs, list) and raw_docs else ["income_certificate", "aadhaar"]
+        docs = [str(d) for d in raw_docs] if isinstance(raw_docs, list) else []
         advice = raw_data.get("ai_advice") or expl
         can_auto = bool(raw_data.get("can_automate", True))
         cta = str(raw_data.get("cta_message") or "Proceed to Document Hub")
@@ -830,7 +830,7 @@ def classify_citizen_intent(text: str) -> IntentClassifyResponse:
             category="general",
             confidence=0.5,
             explanation="No query provided; defaulted to ServicePlus.",
-            suggested_documents=["income_certificate", "aadhaar"],
+            suggested_documents=["Aadhaar Card"],
             ai_advice="Welcome to Voice-to-Legacy! Please ask any question about government schemes, scholarships, farmer support, or citizen certificates.",
             can_automate=True,
             cta_message="Launch Autonomous Form Agent",
@@ -950,7 +950,7 @@ def classify_citizen_intent(text: str) -> IntentClassifyResponse:
         category="general",
         confidence=0.60,
         explanation="Query did not strongly match a specific scheme; defaulted to ServicePlus 1784.",
-        suggested_documents=["income_certificate", "aadhaar"],
+        suggested_documents=["Aadhaar Card"],
         ai_advice="We could not definitively match your query to a single scheme. You can explore standard citizen registration on ServicePlus or search again.",
         can_automate=True,
         cta_message="Open Citizen Registration",

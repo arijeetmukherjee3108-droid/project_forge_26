@@ -454,6 +454,43 @@ const toIsoDate = (val?: string) => {
   return val;
 };
 
+const getRelevantFieldsForService = (
+  selectedService?: IntentClassificationResponse | null
+): FieldMeta[] => {
+  // Dynamically adapt to whichever fields the LLM classifier distilled for this portal in Step 1
+  if (selectedService?.fields_to_fill && selectedService.fields_to_fill.length > 0) {
+    const needed = selectedService.fields_to_fill.map((s) => s.toLowerCase());
+    const matched = FORM_FIELDS.filter((f) => {
+      const key = (f.key as string).toLowerCase();
+      const lbl = f.label.toLowerCase();
+      return needed.some(
+        (n) =>
+          n.includes(key) ||
+          key.includes(n) ||
+          n.includes(lbl.split(' ')[0]) ||
+          (n.includes('name') && key === 'full_name' && !n.includes('father')) ||
+          (n.includes('father') && key === 'father_or_guardian_name') ||
+          ((n.includes('birth') || n.includes('dob')) && key === 'date_of_birth') ||
+          (n.includes('gender') && key === 'gender') ||
+          ((n.includes('mobile') || n.includes('phone')) && key === 'mobile_number') ||
+          (n.includes('email') && key === 'email') ||
+          (n.includes('state') && key === 'state') ||
+          (n.includes('district') && key === 'district') ||
+          (n.includes('income') && key === 'annual_income') ||
+          ((n.includes('category') || n.includes('caste')) && key === 'category') ||
+          (n.includes('address') && key === 'address_line') ||
+          ((n.includes('pin') || n.includes('postal')) && key === 'pincode')
+      );
+    });
+    if (matched.length > 0) return matched;
+  }
+
+  // Fallback: general common identity fields
+  return FORM_FIELDS.filter((f) =>
+    ['full_name', 'father_or_guardian_name', 'date_of_birth', 'gender', 'mobile_number', 'state', 'annual_income'].includes(f.key)
+  );
+};
+
 const App: React.FC = () => {
   const [currentStep, setCurrentStep] = useState(1);
   const [activeMode, setActiveMode] = useState<'apply' | 'eligibility'>('apply');
@@ -523,6 +560,7 @@ const App: React.FC = () => {
 
   // Step 2: Upload & Google Vault
   const [file, setFile] = useState<File | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [extraction, setExtraction] = useState<ExtractionResponse | null>(null);
@@ -557,6 +595,8 @@ const App: React.FC = () => {
   // Bug 7: Citizen Desired Account Password (removed hardcoded 'ADmin@357')
   const [portalPassword, setPortalPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [portalPin, setPortalPin] = useState('123456');
+  const [showPin, setShowPin] = useState(false);
   const [termsAccepted, setTermsAccepted] = useState(true);
 
   const generateStrongPassword = () => {
@@ -845,21 +885,28 @@ const App: React.FC = () => {
     showToast(`Switched scheme to ${scheme.service_name}`, 'info');
   };
 
-  // File Upload Handlers
+  // File Upload Handlers (Supports Multi-File Drag & Drop + Selection)
   const handleDrop = useCallback((e: DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     setDragOver(false);
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      setFile(e.dataTransfer.files[0]);
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      const incoming = Array.from(e.dataTransfer.files);
+      setFiles((prev) => [...prev, ...incoming]);
+      setFile(incoming[0]);
     }
   }, []);
 
   const handleFileSelect = (e: ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) setFile(e.target.files[0]);
+    if (e.target.files && e.target.files.length > 0) {
+      const incoming = Array.from(e.target.files);
+      setFiles((prev) => [...prev, ...incoming]);
+      setFile(incoming[0]);
+    }
   };
 
   const handleUpload = async () => {
-    if (!file) return;
+    const queue = files.length > 0 ? files : (file ? [file] : []);
+    if (queue.length === 0) return;
     setLoading(true);
 
     if (USE_MOCK) {
@@ -873,11 +920,34 @@ const App: React.FC = () => {
     }
 
     try {
-      const resp = await extractDocument(file);
-      setExtraction(resp);
-      setProfile(resp.profile);
-      setUncertainFields(resp.uncertain_fields);
-      showToast('Document parsed successfully! Review extracted data below.', 'success');
+      let lastResp: ExtractionResponse | null = null;
+      for (const item of queue) {
+        const resp = await extractDocument(item);
+        lastResp = resp;
+        // Cumulative merge into profile
+        setProfile((prev) => {
+          const merged = { ...prev };
+          for (const [k, v] of Object.entries(resp.profile)) {
+            if (v !== null && v !== undefined && v !== '') {
+              (merged as any)[k] = v;
+            }
+          }
+          return merged;
+        });
+        if (resp.uncertain_fields) {
+          setUncertainFields((prev) => Array.from(new Set([...prev, ...resp.uncertain_fields])));
+        }
+      }
+
+      if (lastResp) {
+        setExtraction(lastResp);
+        showToast(
+          queue.length > 1
+            ? `${queue.length} documents parsed & fused into citizen profile!`
+            : 'Document parsed successfully! Review extracted data below.',
+          'success'
+        );
+      }
     } catch {
       showToast('Extraction failed – make sure backend is reachable.', 'error');
     } finally {
@@ -1854,11 +1924,17 @@ const App: React.FC = () => {
               {/* Target Portal Identification Badge */}
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.6rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
                 <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', background: 'rgba(56, 189, 248, 0.1)', border: '1px solid rgba(56, 189, 248, 0.28)', borderRadius: '20px', padding: '0.35rem 0.85rem', fontSize: '0.82rem', color: '#38bdf8' }}>
-                  <span>🏛️ Target Portal:</span>
-                  <strong>{selectedService?.portal_name || 'National ServicePlus Portal'}</strong>
+                  <span>Target Portal:</span>
+                  <strong>{selectedService?.portal_name || 'Official Portal'}</strong>
                   {selectedService?.portal_url && (
                     <a href={selectedService.portal_url} target="_blank" rel="noopener noreferrer" style={{ color: '#93c5fd', textDecoration: 'underline', marginLeft: '0.2rem' }}>
-                      {new URL(selectedService.portal_url).hostname} ↗
+                      {(() => {
+                        try {
+                          return `${new URL(selectedService.portal_url).hostname} ↗`;
+                        } catch {
+                          return `${selectedService.portal_url} ↗`;
+                        }
+                      })()}
                     </a>
                   )}
                 </div>
@@ -1883,7 +1959,7 @@ const App: React.FC = () => {
                   : 'Attach your required document below (PDF or Image). AI will extract verified identity data for form pre-filling.'}
               </p>
 
-              {/* Unified Required Documents Checklist with Smart Auto-Compressor */}
+              {/* Required Documents Checklist (Prioritizes LLM Brain classification) */}
               {((selectedService?.required_documents && selectedService.required_documents.length > 0) ||
                 (dynamicBlueprint?.required_documents_meta && dynamicBlueprint.required_documents_meta.length > 0)) && (
                 <div style={{ marginBottom: '1.25rem', background: 'rgba(255, 255, 255, 0.03)', border: '1px solid rgba(255, 255, 255, 0.08)', borderRadius: '12px', padding: '1rem 1.25rem' }}>
@@ -1891,50 +1967,15 @@ const App: React.FC = () => {
                     <span style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
                       <span>REQUIRED DOCUMENTS FOR THIS APPLICATION:</span>
                     </span>
-                    {dynamicBlueprint?.required_documents_meta && dynamicBlueprint.required_documents_meta.length > 0 && (
-                      <span style={{ fontSize: '0.68rem', color: '#38bdf8', background: 'rgba(56, 189, 248, 0.12)', border: '1px solid rgba(56, 189, 248, 0.25)', padding: '0.15rem 0.5rem', borderRadius: '4px' }}>
-                        Live Portal Verified
-                      </span>
-                    )}
+                    <span style={{ fontSize: '0.68rem', color: '#38bdf8', background: 'rgba(56, 189, 248, 0.12)', border: '1px solid rgba(56, 189, 248, 0.25)', padding: '0.15rem 0.5rem', borderRadius: '4px' }}>
+                      Official Requirements
+                    </span>
                   </div>
 
-                  {/* Render Discovered Documents Cleanly */}
+                  {/* Render Verified Service Documents */}
                   <div style={{ display: 'flex', gap: '0.55rem', flexWrap: 'wrap' }}>
-                    {/* If dynamic DOM scanner found specific input slots, show them with clean size constraints */}
-                    {dynamicBlueprint?.required_documents_meta && dynamicBlueprint.required_documents_meta.length > 0 ? (
-                      dynamicBlueprint.required_documents_meta.map((doc, idx) => {
-                        const cleanLabel = (doc.original_label || doc.display_name)
-                          .replace(/\s*\([^)]*max[^)]*\)/gi, '')
-                          .replace(/\s*\([^)]*pdf[^)]*\)/gi, '')
-                          .trim();
-                        return (
-                          <span
-                            key={idx}
-                            className="scheme-doc-pill"
-                            style={{
-                              background: 'rgba(56, 189, 248, 0.12)',
-                              borderColor: 'rgba(56, 189, 248, 0.35)',
-                              color: '#38bdf8',
-                              padding: '0.35rem 0.75rem',
-                              borderRadius: '8px',
-                              fontSize: '0.8rem',
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              gap: '0.4rem',
-                            }}
-                          >
-                            <span>✓</span>
-                            <span>{cleanLabel || doc.display_name}</span>
-                            {doc.max_size_kb && (
-                              <span style={{ fontSize: '0.7rem', opacity: 0.85, background: 'rgba(56, 189, 248, 0.2)', padding: '0.1rem 0.35rem', borderRadius: '4px' }}>
-                                Max {doc.max_size_kb} KB
-                              </span>
-                            )}
-                          </span>
-                        );
-                      })
-                    ) : (
-                      selectedService?.required_documents?.map((doc, idx) => (
+                    {selectedService?.required_documents && selectedService.required_documents.length > 0 ? (
+                      selectedService.required_documents.map((doc, idx) => (
                         <span
                           key={idx}
                           className="scheme-doc-pill"
@@ -1952,6 +1993,27 @@ const App: React.FC = () => {
                         >
                           <span>✓</span>
                           <span>{doc}</span>
+                        </span>
+                      ))
+                    ) : (
+                      dynamicBlueprint?.required_documents_meta?.map((doc, idx) => (
+                        <span
+                          key={idx}
+                          className="scheme-doc-pill"
+                          style={{
+                            background: 'rgba(56, 189, 248, 0.12)',
+                            borderColor: 'rgba(56, 189, 248, 0.3)',
+                            color: '#38bdf8',
+                            padding: '0.35rem 0.75rem',
+                            borderRadius: '8px',
+                            fontSize: '0.8rem',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '0.4rem',
+                          }}
+                        >
+                          <span>✓</span>
+                          <span>{doc.display_name}</span>
                         </span>
                       ))
                     )}
@@ -1975,12 +2037,13 @@ const App: React.FC = () => {
                   <Icons.AppsGrid />
                 </div>
                 <div className="dropzone-prompt">
-                  <strong>Click to select file</strong> or drag & drop here
+                  <strong>Click to select file(s)</strong> or drag & drop here
                 </div>
-                <div className="dropzone-types">PDF, PNG, JPG (Certificate or Marksheet)</div>
+                <div className="dropzone-types">PDF, PNG, JPG (Aadhaar, PAN, Marksheet, Certificates — Multi-upload supported)</div>
                 <input
                   ref={fileInputRef}
                   type="file"
+                  multiple
                   accept=".pdf,.png,.jpg,.jpeg"
                   onChange={handleFileSelect}
                   style={{ display: 'none' }}
@@ -2025,8 +2088,26 @@ const App: React.FC = () => {
                 </button>
               </div>
 
-              {file && (
-                <div className="attached-file-pill">
+              {/* Attached Files List (Supports Multiple Documents) */}
+              {files.length > 0 ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem', marginTop: '1rem' }}>
+                  {files.map((f, idx) => (
+                    <div key={idx} className="attached-file-pill">
+                      <div className="file-info">
+                        <span>{f.name} ({(f.size / 1024).toFixed(1)} KB)</span>
+                      </div>
+                      <button
+                        className="file-delete-btn"
+                        onClick={() => {
+                          setFiles((prev) => prev.filter((_, i) => i !== idx));
+                          if (files.length <= 1) setFile(null);
+                        }}
+                      >✕</button>
+                    </div>
+                  ))}
+                </div>
+              ) : file && (
+                <div className="attached-file-pill" style={{ marginTop: '1rem' }}>
                   <div className="file-info">
                     <span>{file.name} ({(file.size / 1024).toFixed(1)} KB)</span>
                   </div>
@@ -2040,66 +2121,78 @@ const App: React.FC = () => {
                 </button>
                 <button
                   className="gemini-btn gemini-btn-primary"
-                  disabled={!file || loading}
+                  disabled={(files.length === 0 && !file) || loading}
                   onClick={handleUpload}
                 >
-                  {loading ? 'Extracting Data…' : 'Extract Document Details'}
+                  {loading ? 'Extracting Data…' : `Extract Details from ${files.length > 1 ? `${files.length} Documents` : 'Document'}`}
                 </button>
               </div>
 
-              {/* Extracted Document Preview Card (shows extracted data before proceeding) */}
-              {extraction && extraction.profile && (
+              {/* Extracted Document Preview Card (shows accumulated extracted data before proceeding) */}
+              {(profile.full_name || profile.father_or_guardian_name || profile.date_of_birth || profile.mobile_number) && (
                 <div style={{ marginTop: '1.5rem', background: 'rgba(56, 189, 248, 0.05)', border: '1px solid rgba(56, 189, 248, 0.25)', borderRadius: '12px', padding: '1.25rem' }}>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.85rem' }}>
                     <div style={{ fontWeight: 700, fontSize: '0.92rem', color: '#f8fafc' }}>
-                      Extracted Document Data
+                      Extracted Document Data {files.length > 1 ? `(${files.length} Documents Fused)` : ''}
                     </div>
                     <span style={{ fontSize: '0.72rem', background: 'rgba(34, 197, 94, 0.15)', border: '1px solid rgba(34, 197, 94, 0.35)', color: '#4ade80', padding: '0.2rem 0.6rem', borderRadius: '12px' }}>
-                      Verified Extraction
+                      AI Verified Extraction
                     </span>
                   </div>
 
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '0.65rem', marginBottom: '1.1rem' }}>
-                    {extraction.profile.full_name && (
+                    {profile.full_name && (
                       <div style={{ background: 'rgba(255, 255, 255, 0.03)', padding: '0.55rem 0.75rem', borderRadius: '8px', border: '1px solid rgba(255, 255, 255, 0.06)' }}>
                         <div style={{ fontSize: '0.7rem', color: '#94a3b8' }}>Full Name</div>
-                        <div style={{ fontSize: '0.85rem', color: '#f1f5f9', fontWeight: 600 }}>{extraction.profile.full_name}</div>
+                        <div style={{ fontSize: '0.85rem', color: '#f1f5f9', fontWeight: 600 }}>{profile.full_name}</div>
                       </div>
                     )}
-                    {extraction.profile.father_or_guardian_name && (
+                    {profile.father_or_guardian_name && (
                       <div style={{ background: 'rgba(255, 255, 255, 0.03)', padding: '0.55rem 0.75rem', borderRadius: '8px', border: '1px solid rgba(255, 255, 255, 0.06)' }}>
                         <div style={{ fontSize: '0.7rem', color: '#94a3b8' }}>Father/Guardian Name</div>
-                        <div style={{ fontSize: '0.85rem', color: '#f1f5f9', fontWeight: 600 }}>{extraction.profile.father_or_guardian_name}</div>
+                        <div style={{ fontSize: '0.85rem', color: '#f1f5f9', fontWeight: 600 }}>{profile.father_or_guardian_name}</div>
                       </div>
                     )}
-                    {extraction.profile.date_of_birth && (
+                    {profile.date_of_birth && (
                       <div style={{ background: 'rgba(255, 255, 255, 0.03)', padding: '0.55rem 0.75rem', borderRadius: '8px', border: '1px solid rgba(255, 255, 255, 0.06)' }}>
                         <div style={{ fontSize: '0.7rem', color: '#94a3b8' }}>Date of Birth</div>
-                        <div style={{ fontSize: '0.85rem', color: '#f1f5f9', fontWeight: 600 }}>{extraction.profile.date_of_birth}</div>
+                        <div style={{ fontSize: '0.85rem', color: '#f1f5f9', fontWeight: 600 }}>{profile.date_of_birth}</div>
                       </div>
                     )}
-                    {extraction.profile.gender && (
+                    {profile.gender && (
                       <div style={{ background: 'rgba(255, 255, 255, 0.03)', padding: '0.55rem 0.75rem', borderRadius: '8px', border: '1px solid rgba(255, 255, 255, 0.06)' }}>
                         <div style={{ fontSize: '0.7rem', color: '#94a3b8' }}>Gender</div>
-                        <div style={{ fontSize: '0.85rem', color: '#f1f5f9', fontWeight: 600 }}>{extraction.profile.gender}</div>
+                        <div style={{ fontSize: '0.85rem', color: '#f1f5f9', fontWeight: 600 }}>{profile.gender}</div>
                       </div>
                     )}
-                    {extraction.profile.state && (
+                    {profile.state && (
                       <div style={{ background: 'rgba(255, 255, 255, 0.03)', padding: '0.55rem 0.75rem', borderRadius: '8px', border: '1px solid rgba(255, 255, 255, 0.06)' }}>
                         <div style={{ fontSize: '0.7rem', color: '#94a3b8' }}>State</div>
-                        <div style={{ fontSize: '0.85rem', color: '#f1f5f9', fontWeight: 600 }}>{extraction.profile.state}</div>
+                        <div style={{ fontSize: '0.85rem', color: '#f1f5f9', fontWeight: 600 }}>{profile.state}</div>
                       </div>
                     )}
-                    {extraction.profile.mobile_number && (
+                    {profile.district && (
+                      <div style={{ background: 'rgba(255, 255, 255, 0.03)', padding: '0.55rem 0.75rem', borderRadius: '8px', border: '1px solid rgba(255, 255, 255, 0.06)' }}>
+                        <div style={{ fontSize: '0.7rem', color: '#94a3b8' }}>District</div>
+                        <div style={{ fontSize: '0.85rem', color: '#f1f5f9', fontWeight: 600 }}>{profile.district}</div>
+                      </div>
+                    )}
+                    {profile.mobile_number && (
                       <div style={{ background: 'rgba(255, 255, 255, 0.03)', padding: '0.55rem 0.75rem', borderRadius: '8px', border: '1px solid rgba(255, 255, 255, 0.06)' }}>
                         <div style={{ fontSize: '0.7rem', color: '#94a3b8' }}>Mobile Number</div>
-                        <div style={{ fontSize: '0.85rem', color: '#f1f5f9', fontWeight: 600 }}>{extraction.profile.mobile_number}</div>
+                        <div style={{ fontSize: '0.85rem', color: '#f1f5f9', fontWeight: 600 }}>{profile.mobile_number}</div>
                       </div>
                     )}
-                    {extraction.profile.annual_income !== undefined && extraction.profile.annual_income !== null && (
+                    {profile.address_line && (
+                      <div style={{ background: 'rgba(255, 255, 255, 0.03)', padding: '0.55rem 0.75rem', borderRadius: '8px', border: '1px solid rgba(255, 255, 255, 0.06)' }}>
+                        <div style={{ fontSize: '0.7rem', color: '#94a3b8' }}>Address</div>
+                        <div style={{ fontSize: '0.85rem', color: '#f1f5f9', fontWeight: 600 }}>{profile.address_line}</div>
+                      </div>
+                    )}
+                    {profile.annual_income !== undefined && profile.annual_income !== null && (
                       <div style={{ background: 'rgba(255, 255, 255, 0.03)', padding: '0.55rem 0.75rem', borderRadius: '8px', border: '1px solid rgba(255, 255, 255, 0.06)' }}>
                         <div style={{ fontSize: '0.7rem', color: '#94a3b8' }}>Annual Income</div>
-                        <div style={{ fontSize: '0.85rem', color: '#f1f5f9', fontWeight: 600 }}>₹{Number(extraction.profile.annual_income).toLocaleString('en-IN')}</div>
+                        <div style={{ fontSize: '0.85rem', color: '#f1f5f9', fontWeight: 600 }}>₹{Number(profile.annual_income).toLocaleString('en-IN')}</div>
                       </div>
                     )}
                   </div>
@@ -2123,6 +2216,7 @@ const App: React.FC = () => {
           ════════════════════════════════════════ */}
           {currentStep === 3 && (() => {
             const currentServiceId = selectedService?.service_id || profile.target_service_id || '1784';
+            const isDigilocker = currentServiceId.toLowerCase().includes('digilocker');
             const isVidyaLakshmi =
               currentServiceId === 'vidyalakshmi' ||
               selectedService?.portal_id === 'VIDYA_LAKSHMI_PORTAL' ||
@@ -2135,21 +2229,34 @@ const App: React.FC = () => {
               (!isVidyaLakshmi && currentServiceId !== '1784' && currentServiceId !== 'citizen_registration')
             );
 
+            // Dynamically select strictly the relevant fields for this portal from LLM classification
+            const relevantFields = getRelevantFieldsForService(selectedService);
+
             // Validation logic based on active portal
             const isMobileValid = Boolean(profile.mobile_number && /^\d{10}$/.test(profile.mobile_number.trim()));
             const isEmailValid = !profile.email || /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(profile.email.trim());
             const isPincodeValid = !profile.pincode || /^\d{6}$/.test(profile.pincode.trim());
 
-            // Core required fields across any portal: Full Name, 10-digit Mobile, State
-            const hasCoreFields = Boolean(
-              profile.full_name &&
-              profile.full_name.trim().length >= 2 &&
-              isMobileValid &&
-              profile.state &&
-              profile.state.trim().length >= 2
+            // Core identity validation: full_name and mobile_number (if mobile is in relevant fields)
+            const hasFullName = Boolean(profile.full_name && profile.full_name.trim().length >= 2);
+            const needsMobile = relevantFields.some((f) => f.key === 'mobile_number');
+            const hasValidMobile = !needsMobile || isMobileValid;
+
+            // Auxiliary field formats (only validated if a value was provided by user)
+            const areFieldsValid = hasFullName && hasValidMobile && isEmailValid && isPincodeValid;
+
+            // Dynamically detect if portal requires a PIN or Password from fields_to_fill
+            const needsPin = Boolean(selectedService?.fields_to_fill?.some((f) => /pin/i.test(f) && !/pincode|postal/i.test(f)));
+            const needsPassword = Boolean(
+              selectedService?.fields_to_fill?.some((f) => /pass/i.test(f)) ||
+              currentServiceId === 'citizen_registration' ||
+              currentServiceId === '1784'
             );
 
-            let isFormComplete = hasCoreFields && isEmailValid && isPincodeValid;
+            const isPinValid = !needsPin || portalPin.length === 6;
+            const isPwValid = !needsPassword || isPasswordValid;
+
+            const isFormComplete = areFieldsValid && isPinValid && isPwValid;
 
             // Filter out navigation or toggle artifacts from dynamic portal DOM
             const genuineDynamicFields = (dynamicBlueprint?.fields || []).filter(f => {
@@ -2262,10 +2369,10 @@ const App: React.FC = () => {
                     </div>
                   </div>
                 ) : (
-                  /* ─── CASE 2: UNIVERSAL CITIZEN PROFILE FORM (Always visible for all portals) ─── */
+                  /* ─── CASE 2: PORTAL-ADAPTIVE CITIZEN PROFILE FORM (Only required fields) ─── */
                   <>
                     <div className="gemini-form-grid">
-                      {FORM_FIELDS.map((f) => {
+                      {relevantFields.map((f) => {
                         const uncertain = uncertainFields.includes(f.key as string);
                         const val = (profile as any)[f.key];
                         const strVal = val !== undefined && val !== null ? String(val) : '';
@@ -2296,6 +2403,7 @@ const App: React.FC = () => {
                           <div key={f.key as string} className={`form-item ${f.spanTwo ? 'span-two' : ''}`}>
                             <label className="item-label">
                               <span>{f.label}</span>
+                              {strVal && <span style={{ fontSize: '0.68rem', color: '#4ade80', marginLeft: '0.45rem', fontWeight: 500 }}>✓ Auto-filled</span>}
                               {uncertain && <span className="uncertain-tag">Review</span>}
                             </label>
                             {f.type === 'select' && f.options ? (
@@ -2397,8 +2505,56 @@ const App: React.FC = () => {
                       </div>
                     )}
 
-                    {/* Portal Password Section for ServicePlus registration */}
-                    {(!isDynamicPortal || selectedService?.service_id === '1784' || selectedService?.service_id === 'citizen_registration') && (
+                    {/* Dynamic Portal Security PIN Section (shown whenever portal requires a PIN) */}
+                    {needsPin && (
+                      <div className="account-password-section" style={{ marginTop: '1.25rem' }}>
+                        <div className="account-password-header">
+                          <div className="account-password-title">
+                            <span>6-Digit Portal Security PIN</span>
+                          </div>
+                          <button
+                            type="button"
+                            className="generate-password-btn"
+                            onClick={() => {
+                              const randomPin = Math.floor(100000 + Math.random() * 900000).toString();
+                              setPortalPin(randomPin);
+                              showToast(`Generated secure 6-digit PIN: ${randomPin}`, 'info');
+                            }}
+                            title="Generate a 6-digit PIN"
+                          >
+                            Suggest 6-Digit PIN
+                          </button>
+                        </div>
+                        <p className="account-password-desc">
+                          Set the 6-digit security PIN for your account registration. The AI browser agent will submit this PIN on the official portal.
+                        </p>
+
+                        <div className="sp-password-wrap" style={{ maxWidth: '320px' }}>
+                          <input
+                            type={showPin ? 'text' : 'password'}
+                            className="gemini-input sp-password-input"
+                            value={portalPin}
+                            maxLength={6}
+                            onChange={(e) => setPortalPin(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                            placeholder="6-digit PIN (e.g. 849201)"
+                          />
+                          <button
+                            type="button"
+                            className="sp-password-toggle-btn"
+                            onClick={() => setShowPin(!showPin)}
+                            title={showPin ? 'Hide PIN' : 'Show PIN'}
+                          >
+                            {showPin ? 'Hide' : 'Show'}
+                          </button>
+                        </div>
+                        <div style={{ marginTop: '0.35rem', fontSize: '0.74rem', color: portalPin.length === 6 ? '#4ade80' : '#f59e0b' }}>
+                          {portalPin.length === 6 ? '✓ 6-digit PIN ready' : `${6 - portalPin.length} more digit(s) needed`}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Dynamic Portal Account Password Section (shown whenever portal requires a password) */}
+                    {needsPassword && (
                       <div className="account-password-section">
                         <div className="account-password-header">
                           <div className="account-password-title">
@@ -2482,7 +2638,7 @@ const App: React.FC = () => {
                     onClick={handleCheckEligibility}
                     title={
                       !isFormComplete
-                        ? 'Please verify that Full Name, 10-digit Mobile, and State are filled'
+                        ? (!hasFullName ? 'Please enter citizen Full Name' : !hasValidMobile ? 'Please enter valid 10-digit Mobile Number' : 'Please check required fields')
                         : !verified
                         ? 'Please tick the confirmation checkbox'
                         : 'Verify & Proceed to Registration'
