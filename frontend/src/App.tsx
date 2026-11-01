@@ -461,6 +461,7 @@ const App: React.FC = () => {
   // Step 1: Intent
   const [intent, setIntent] = useState('');
   const [isListening, setIsListening] = useState(false);
+  const recognitionRef = useRef<any>(null);
   const [selectedDomain, setSelectedDomain] = useState<DomainCategory>('education');
   const [advisorChat, setAdvisorChat] = useState<ChatMessage[]>([]);
   const [promptIndex, setPromptIndex] = useState(0);
@@ -632,7 +633,24 @@ const App: React.FC = () => {
     setCurrentStep(targetStep);
   };
 
-  // Web Speech API for the microphone icon
+  // Clean up any ongoing Web Speech API or SpeechSynthesis sessions on unmount
+  useEffect(() => {
+    return () => {
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.abort();
+        } catch {}
+        recognitionRef.current = null;
+      }
+      if ('speechSynthesis' in window) {
+        try {
+          window.speechSynthesis.cancel();
+        } catch {}
+      }
+    };
+  }, []);
+
+  // Web Speech API for the microphone icon (with safe lifecycle management)
   const handleToggleVoice = () => {
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SpeechRecognition) {
@@ -640,11 +658,18 @@ const App: React.FC = () => {
       return;
     }
     if (isListening) {
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.abort();
+        } catch {}
+        recognitionRef.current = null;
+      }
       setIsListening(false);
       return;
     }
     try {
       const recognition = new SpeechRecognition();
+      recognitionRef.current = recognition;
       recognition.lang = 'en-IN';
       recognition.interimResults = false;
       recognition.onstart = () => {
@@ -655,16 +680,22 @@ const App: React.FC = () => {
         const transcript = event.results[0][0].transcript;
         setIntent(transcript);
         setIsListening(false);
+        recognitionRef.current = null;
         showToast(`Heard: "${transcript}"`, 'success');
       };
       recognition.onerror = () => {
         setIsListening(false);
+        recognitionRef.current = null;
         showToast('Voice input error. Try typing.', 'error');
       };
-      recognition.onend = () => setIsListening(false);
+      recognition.onend = () => {
+        setIsListening(false);
+        recognitionRef.current = null;
+      };
       recognition.start();
     } catch {
       setIsListening(false);
+      recognitionRef.current = null;
     }
   };
 
@@ -1618,12 +1649,19 @@ const App: React.FC = () => {
                                       Official Portal: <strong style={{ color: '#e2e8f0' }}>{msg.schemeMatch.portal_name}</strong>
                                       {msg.schemeMatch.portal_url && (
                                         <a
-                                          href={msg.schemeMatch.portal_url}
+                                          href={msg.schemeMatch.portal_url.startsWith('http') ? msg.schemeMatch.portal_url : `https://${msg.schemeMatch.portal_url}`}
                                           target="_blank"
                                           rel="noopener noreferrer"
                                           style={{ color: '#38bdf8', textDecoration: 'none', marginLeft: '0.4rem' }}
                                         >
-                                          {new URL(msg.schemeMatch.portal_url).hostname} ↗
+                                          {(() => {
+                                            try {
+                                              const u = msg.schemeMatch.portal_url.startsWith('http') ? msg.schemeMatch.portal_url : `https://${msg.schemeMatch.portal_url}`;
+                                              return `${new URL(u).hostname} ↗`;
+                                            } catch {
+                                              return `${msg.schemeMatch.portal_url} ↗`;
+                                            }
+                                          })()}
                                         </a>
                                       )}
                                     </div>
