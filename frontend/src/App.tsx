@@ -2674,7 +2674,7 @@ const App: React.FC = () => {
                         />
                       </div>
 
-                      <div className="form-item span-two">
+                      <div className="form-item">
                         <label className="item-label">
                           <span>State of Domicile</span>
                           {uncertainFields.includes('state') && <span className="uncertain-tag">Review</span>}
@@ -2686,6 +2686,39 @@ const App: React.FC = () => {
                           value={profile.state || ''}
                           onChange={handleInputChange}
                           placeholder="e.g. Rajasthan, Uttar Pradesh, Maharashtra"
+                        />
+                      </div>
+
+                      <div className="form-item">
+                        <label className="item-label">
+                          <span>Postal PIN Code</span>
+                          {uncertainFields.includes('pincode') && <span className="uncertain-tag">Review</span>}
+                        </label>
+                        <input
+                          className="gemini-input"
+                          type="text"
+                          name="pincode"
+                          maxLength={6}
+                          value={profile.pincode || ''}
+                          onChange={handleInputChange}
+                          placeholder="6-digit PIN code"
+                        />
+                      </div>
+
+                      <div className="form-item span-two">
+                        <label className="item-label">
+                          <span>Annual Family Income (₹)</span>
+                          <span style={{ fontSize: '0.72rem', color: '#94a3b8', fontWeight: 400 }}> (Leave blank if not seeking interest subsidy)</span>
+                          {profile.annual_income !== undefined && profile.annual_income !== null && <span style={{ fontSize: '0.68rem', color: '#4ade80', marginLeft: '0.45rem', fontWeight: 500 }}>✓ Auto-filled</span>}
+                          {uncertainFields.includes('annual_income') && <span className="uncertain-tag">Review</span>}
+                        </label>
+                        <input
+                          className="gemini-input"
+                          type="number"
+                          name="annual_income"
+                          value={profile.annual_income ?? ''}
+                          onChange={handleInputChange}
+                          placeholder="e.g. 250000"
                         />
                       </div>
                     </div>

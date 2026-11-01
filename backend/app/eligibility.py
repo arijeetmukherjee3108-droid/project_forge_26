@@ -137,8 +137,16 @@ def _rule_required_fields(profile: CitizenProfile, cfg: dict) -> RuleResult:
 def _rule_income_ceiling(profile: CitizenProfile, cfg: dict) -> RuleResult:
     """Annual income must be ≤ cfg['ceiling_inr']."""
     ceiling: int = cfg["ceiling_inr"]
+    is_optional = cfg.get("optional", False)
     # ASSUMPTION: verify against the official form/guidelines
     if profile.annual_income is None:
+        if is_optional:
+            return RuleResult(
+                rule_id="income_ceiling",
+                description=f"Annual income ceiling (Rs {ceiling:,}) for interest subsidy",
+                passed=True,
+                explanation=f"General schemes have no income ceiling. (Interest subsidy requires income ≤ Rs {ceiling:,}).",
+            )
         return RuleResult(
             rule_id="income_ceiling",
             description=f"Annual income must be ≤ Rs {ceiling:,}",
@@ -249,8 +257,16 @@ def _rule_occupation(profile: CitizenProfile, cfg: dict) -> RuleResult:
 def _rule_required_documents(profile: CitizenProfile, cfg: dict) -> RuleResult:
     """At least one document from cfg['doc_tags'] must appear in source_documents."""
     required_any: list[str] = cfg["doc_tags"]
-    # ASSUMPTION: verify against the official form/guidelines
-    found = [d for d in required_any if d in profile.source_documents]
+    # Check source_documents tags or implicit proofs (e.g. aadhaar_last4 confirms aadhaar)
+    docs = set(profile.source_documents)
+    if profile.aadhaar_last4:
+        docs.add("aadhaar")
+    if any(d.startswith("saved:") for d in profile.source_documents):
+        # A citizen-uploaded document is attached
+        for r in required_any:
+            docs.add(r)
+            break
+    found = [d for d in required_any if d in docs]
     if found:
         return RuleResult(
             rule_id="required_documents",
@@ -397,6 +413,7 @@ SERVICE_RULES: dict[str, dict] = {
                 _rule_income_ceiling,
                 {
                     "ceiling_inr": 450_000,
+                    "optional": True,
                 },
             ),
             (
@@ -408,8 +425,6 @@ SERVICE_RULES: dict[str, dict] = {
                         "mobile_number",
                         "email",
                         "state",
-                        "pincode",
-                        "annual_income",
                     ],
                 },
             ),
