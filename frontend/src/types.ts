@@ -60,6 +60,10 @@ export interface IntentClassificationResponse {
   ai_advice?: string;
   can_automate?: boolean;
   cta_message?: string;
+  message_type?: 'chat' | 'scheme_info' | 'ready_to_route';
+  reason_chosen?: string;
+  limitations?: string;
+  fields_to_fill?: string[];
 }
 
 /**

@@ -685,13 +685,23 @@ const App: React.FC = () => {
       required_documents_list: target.required_documents,
     }));
 
+    // Seed Google Vault query with the first required document
+    if (target.required_documents && target.required_documents.length > 0) {
+      const firstDoc = target.required_documents[0].toLowerCase();
+      if (firstDoc.includes('income')) setVaultQuery('income');
+      else if (firstDoc.includes('marksheet') || firstDoc.includes('10th') || firstDoc.includes('12th')) setVaultQuery('marksheet');
+      else if (firstDoc.includes('aadhaar')) setVaultQuery('aadhaar');
+      else if (firstDoc.includes('land') || firstDoc.includes('khasra')) setVaultQuery('land record');
+      else setVaultQuery(target.required_documents[0]);
+    }
+
     const isKnownFastPath = target.service_id === '1784' || target.service_id === 'vidyalakshmi' || target.service_id === 'citizen_registration';
     if (!isKnownFastPath && (target.portal_url || target.service_id)) {
-      showToast(`AI analyzing live portal DOM for ${target.service_name}...`, 'info');
+      showToast(`AI preparing form actions for ${target.service_name}...`, 'info');
       await scanPortal(target.portal_url || target.service_id);
     }
 
-    showToast(`Routing to Document Hub for: ${target.service_name}`, 'success');
+    showToast(`Prepared application for: ${target.service_name}`, 'success');
     setCurrentStep(2);
   };
 
@@ -702,9 +712,9 @@ const App: React.FC = () => {
       return;
     }
 
-    // Check if citizen is explicitly saying "route me", "apply", etc.
-    const isRouteCommand = /(route|apply|proceed|launch|fill form|start application|continue|take me|next page|haan apply|bharo)/i.test(query);
-    if (isRouteCommand && selectedService) {
+    // Only direct navigation confirmations advance immediately without asking the AI
+    const isDirectNavConfirmation = /^(proceed|go to documents|next page|take me to upload|upload documents|let's go|open document hub)$/i.test(query);
+    if (isDirectNavConfirmation && selectedService) {
       handleProceedToApplication(selectedService);
       return;
     }
@@ -723,17 +733,19 @@ const App: React.FC = () => {
     try {
       // 2. Query AI GovTech Advisor for zero-shot intent reasoning & conversational guidance
       const match = await classifyIntent(query);
-      setSelectedService(match);
-      setProfile((prev) => ({
-        ...prev,
-        target_intent: query,
-        target_service_id: match.service_id,
-        target_service_name: match.service_name,
-        target_portal_id: match.portal_id,
-        target_portal_name: match.portal_name,
-        target_portal_url: match.portal_url,
-        required_documents_list: match.required_documents,
-      }));
+      if (match.message_type !== 'chat') {
+        setSelectedService(match);
+        setProfile((prev) => ({
+          ...prev,
+          target_intent: query,
+          target_service_id: match.service_id,
+          target_service_name: match.service_name,
+          target_portal_id: match.portal_id,
+          target_portal_name: match.portal_name,
+          target_portal_url: match.portal_url,
+          required_documents_list: match.required_documents,
+        }));
+      }
 
       // 3. Add AI advisor response
       const adviceContent = match.ai_advice || match.description || `Here are the official guidelines for ${match.service_name}.`;
@@ -742,16 +754,16 @@ const App: React.FC = () => {
         sender: 'assistant',
         text: adviceContent,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        schemeMatch: match,
+        schemeMatch: match.message_type !== 'chat' ? match : undefined,
         canRoute: match.can_automate ?? true,
       };
       setAdvisorChat((prev) => [...prev, assistantMsg]);
     } catch {
-      showToast('Analyzing intent with fallback catalog.', 'info');
+      showToast('Error connecting to advisor. Please try again.', 'error');
       const fallbackMsg: ChatMessage = {
         id: `assist-${Date.now()}`,
         sender: 'assistant',
-        text: 'I found matching services in our verified government catalog. You can proceed directly to the application pipeline.',
+        text: 'I found matching services in our verified government catalog. You can review the details or select a scheme below.',
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         schemeMatch: selectedService || undefined,
         canRoute: true,
@@ -1585,45 +1597,82 @@ const App: React.FC = () => {
                             <div className="chat-scheme-card">
                               <div className="chat-scheme-title-row">
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
-                                  <span style={{ fontSize: '1.15rem' }}>🏛️</span>
-                                  <span className="chat-scheme-name">{msg.schemeMatch.service_name}</span>
+                                  <span style={{ fontSize: '1.2rem' }}>🏛️</span>
+                                  <div>
+                                    <div className="chat-scheme-name">{msg.schemeMatch.service_name}</div>
+                                    <div style={{ fontSize: '0.78rem', color: '#94a3b8' }}>
+                                      Official Portal: <strong style={{ color: '#e2e8f0' }}>{msg.schemeMatch.portal_name}</strong>
+                                      {msg.schemeMatch.portal_url && (
+                                        <a
+                                          href={msg.schemeMatch.portal_url}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          style={{ color: '#38bdf8', textDecoration: 'none', marginLeft: '0.4rem' }}
+                                        >
+                                          {new URL(msg.schemeMatch.portal_url).hostname} ↗
+                                        </a>
+                                      )}
+                                    </div>
+                                  </div>
                                 </div>
                                 <span className={`scheme-category-badge ${msg.schemeMatch.category}`}>
                                   {msg.schemeMatch.category}
                                 </span>
                               </div>
 
-                              <div style={{ fontSize: '0.8rem', color: '#94a3b8', display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
-                                <span>Target Portal: <strong style={{ color: '#e2e8f0' }}>{msg.schemeMatch.portal_name}</strong></span>
-                                {msg.schemeMatch.portal_url && (
-                                  <a
-                                    href={msg.schemeMatch.portal_url}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    style={{ color: '#38bdf8', textDecoration: 'none' }}
-                                  >
-                                    {new URL(msg.schemeMatch.portal_url).hostname} ↗
-                                  </a>
-                                )}
+                              {/* Why Portal Was Chosen */}
+                              {msg.schemeMatch.reason_chosen && (
+                                <div style={{ fontSize: '0.8rem', background: 'rgba(56, 189, 248, 0.06)', borderLeft: '3px solid #38bdf8', padding: '0.45rem 0.65rem', borderRadius: '4px', color: '#cbd5e1' }}>
+                                  <strong style={{ color: '#38bdf8' }}>💡 Why this portal: </strong>
+                                  {msg.schemeMatch.reason_chosen}
+                                </div>
+                              )}
+
+                              {/* Form Fields to Auto-Fill */}
+                              {msg.schemeMatch.fields_to_fill && msg.schemeMatch.fields_to_fill.length > 0 && (
+                                <div style={{ marginTop: '0.2rem' }}>
+                                  <div style={{ fontSize: '0.75rem', color: '#94a3b8', fontWeight: 600, marginBottom: '0.3rem' }}>
+                                    📋 AGENT WILL PRE-FILL THESE FIELDS:
+                                  </div>
+                                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.3rem' }}>
+                                    {msg.schemeMatch.fields_to_fill.map((f, fi) => (
+                                      <span key={fi} style={{ background: 'rgba(255, 255, 255, 0.05)', border: '1px solid rgba(255, 255, 255, 0.1)', padding: '0.15rem 0.5rem', borderRadius: '4px', fontSize: '0.72rem', color: '#e2e8f0' }}>
+                                        {f}
+                                      </span>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* Discovered Required Documents to Attach */}
+                              <div style={{ marginTop: '0.2rem' }}>
+                                <div style={{ fontSize: '0.75rem', color: '#94a3b8', fontWeight: 600, marginBottom: '0.3rem' }}>
+                                  📎 REQUIRED DOCUMENTS TO ATTACH:
+                                </div>
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem' }}>
+                                  {msg.schemeMatch.required_documents.map((doc, di) => (
+                                    <span key={di} className="scheme-doc-pill" style={{ fontSize: '0.75rem', padding: '0.2rem 0.55rem', background: 'rgba(56, 189, 248, 0.12)', borderColor: 'rgba(56, 189, 248, 0.3)', color: '#38bdf8' }}>
+                                      📎 {doc}
+                                    </span>
+                                  ))}
+                                </div>
                               </div>
 
-                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', marginTop: '0.2rem' }}>
-                                <span style={{ fontSize: '0.75rem', color: '#cbd5e1', fontWeight: 600 }}>Required Docs:</span>
-                                {msg.schemeMatch.required_documents.map((doc, di) => (
-                                  <span key={di} className="scheme-doc-pill" style={{ fontSize: '0.72rem', padding: '0.15rem 0.45rem' }}>
-                                    📎 {doc}
-                                  </span>
-                                ))}
-                              </div>
+                              {/* Limitations & Verification Disclosure */}
+                              {msg.schemeMatch.limitations && (
+                                <div style={{ fontSize: '0.76rem', color: '#f59e0b', background: 'rgba(245, 158, 11, 0.08)', border: '1px solid rgba(245, 158, 11, 0.25)', padding: '0.4rem 0.65rem', borderRadius: '6px' }}>
+                                  <span>⚠️ <strong>Portal Checkpoint:</strong> {msg.schemeMatch.limitations}</span>
+                                </div>
+                              )}
 
-                              {/* Prominent Action Button to Proceed to Application Hub */}
+                              {/* Prominent Action Button to Proceed to Application Pipeline */}
                               <div style={{ display: 'flex', gap: '0.6rem', marginTop: '0.4rem', flexWrap: 'wrap' }}>
                                 <button
                                   type="button"
                                   className="chat-route-btn"
                                   onClick={() => handleProceedToApplication(msg.schemeMatch)}
                                 >
-                                  <span>🚀 {msg.schemeMatch.cta_message || 'Route Me to Application & Launch AI Agent'}</span>
+                                  <span>🚀 {msg.schemeMatch.cta_message || 'Proceed to Document Hub'}</span>
                                   <span>→</span>
                                 </button>
 
@@ -1633,7 +1682,7 @@ const App: React.FC = () => {
                                   style={{ fontSize: '0.78rem', padding: '0.4rem 0.8rem', borderRadius: '8px' }}
                                   onClick={() => setShowSchemePicker(!showSchemePicker)}
                                 >
-                                  {showSchemePicker ? '▲ Hide Catalog' : '▾ Choose Different Scheme'}
+                                  {showSchemePicker ? '▲ Hide Catalog' : '▾ Choose Different Portal'}
                                 </button>
                               </div>
 
@@ -1728,16 +1777,74 @@ const App: React.FC = () => {
           ════════════════════════════════════════ */}
           {currentStep === 2 && (
             <div className="gemini-card">
+              {/* Target Portal Identification Badge */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.6rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
+                <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', background: 'rgba(56, 189, 248, 0.1)', border: '1px solid rgba(56, 189, 248, 0.28)', borderRadius: '20px', padding: '0.35rem 0.85rem', fontSize: '0.82rem', color: '#38bdf8' }}>
+                  <span>🏛️ Target Portal:</span>
+                  <strong>{selectedService?.portal_name || 'National ServicePlus Portal'}</strong>
+                  {selectedService?.portal_url && (
+                    <a href={selectedService.portal_url} target="_blank" rel="noopener noreferrer" style={{ color: '#93c5fd', textDecoration: 'underline', marginLeft: '0.2rem' }}>
+                      {new URL(selectedService.portal_url).hostname} ↗
+                    </a>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  className="advisor-reset-btn"
+                  onClick={() => setCurrentStep(1)}
+                  style={{ fontSize: '0.78rem', padding: '0.25rem 0.65rem' }}
+                >
+                  ← Back to AI Advisor
+                </button>
+              </div>
+
               <h2 className="card-title">
                 {selectedService
-                  ? `Upload Document for ${selectedService.service_name}`
-                  : 'Upload Official Citizen Document'}
+                  ? `Document Hub — ${selectedService.service_name}`
+                  : 'Document Hub — Attach Official Citizen Document'}
               </h2>
               <p className="card-desc">
-                {selectedService
-                  ? `Target: ${selectedService.portal_name}. Required for this scheme: ${selectedService.required_documents.join(', ')}.`
-                  : 'Upload your Income Certificate, Marksheet, or ID card (PDF or Image). PyMuPDF & AI will extract structured identity fields for ServicePlus.'}
+                {selectedService?.reason_chosen
+                  ? selectedService.reason_chosen
+                  : 'Attach your required document below (PDF or Image). AI will extract verified identity data for form pre-filling.'}
               </p>
+
+              {/* Required Documents Checklist Box */}
+              {selectedService?.required_documents && selectedService.required_documents.length > 0 && (
+                <div style={{ marginBottom: '1.25rem', background: 'rgba(255, 255, 255, 0.03)', border: '1px solid rgba(255, 255, 255, 0.08)', borderRadius: '10px', padding: '0.9rem 1.15rem' }}>
+                  <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#f8fafc', marginBottom: '0.55rem', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                    <span>📎 REQUIRED DOCUMENTS FOR THIS APPLICATION:</span>
+                  </div>
+                  <div style={{ display: 'flex', gap: '0.55rem', flexWrap: 'wrap' }}>
+                    {selectedService.required_documents.map((doc, idx) => (
+                      <span
+                        key={idx}
+                        className="scheme-doc-pill"
+                        style={{
+                          background: 'rgba(56, 189, 248, 0.12)',
+                          borderColor: 'rgba(56, 189, 248, 0.3)',
+                          color: '#38bdf8',
+                          padding: '0.35rem 0.75rem',
+                          borderRadius: '8px',
+                          fontSize: '0.8rem',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '0.4rem',
+                        }}
+                      >
+                        <span>✓</span>
+                        <span>{doc}</span>
+                      </span>
+                    ))}
+                  </div>
+                  {selectedService.limitations && (
+                    <div style={{ fontSize: '0.75rem', color: '#f59e0b', marginTop: '0.55rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                      <span>⚠️ Note:</span>
+                      <span>{selectedService.limitations}</span>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Task 3: Dynamic Required Documents Pill Display */}
               {dynamicBlueprint && dynamicBlueprint.required_documents_meta && dynamicBlueprint.required_documents_meta.length > 0 && (

@@ -31,6 +31,10 @@ export interface BackendIntentClassifyResponse {
   ai_advice?: string;
   can_automate?: boolean;
   cta_message?: string;
+  message_type?: 'chat' | 'scheme_info' | 'ready_to_route';
+  reason_chosen?: string;
+  limitations?: string;
+  fields_to_fill?: string[];
 }
 
 /**
@@ -179,6 +183,10 @@ export const classifyIntent = async (query: string): Promise<IntentClassificatio
         ai_advice: b.ai_advice || b.explanation || match?.description,
         can_automate: b.can_automate ?? true,
         cta_message: b.cta_message || `Apply for ${b.service_name || 'Scheme'}`,
+        message_type: b.message_type || 'scheme_info',
+        reason_chosen: b.reason_chosen,
+        limitations: b.limitations,
+        fields_to_fill: b.fields_to_fill || [],
       };
     }
   } catch (err) {

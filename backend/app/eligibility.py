@@ -617,37 +617,46 @@ _VALID_SERVICE_IDS = frozenset(SERVICE_RULES.keys())
 # ---------------------------------------------------------------------------
 
 _LLM_INTENT_SYSTEM_PROMPT = """You are an expert AI Indian GovTech Navigator and Scheme Advisor.
-Given any citizen prompt, conversational query, or target scheme/portal description in English, Hindi, or Hinglish:
-1. Answer the citizen's query conversationally and informatively. Explain the scheme, eligibility requirements, documents needed, and application process.
-2. Identify the exact government scheme, department, state/national service, or portal the citizen wants to apply for or access across India.
-3. If the user mentions a specific state (e.g. Rajasthan, Maharashtra, UP, Bihar, Delhi, Karnataka, MP, etc.), route directly to that state's official service/portal.
-4. If the citizen is asking about exams/admissions (e.g. JEE Main, NEET, CUET, UPSC), scholarships (Vidya Lakshmi, NSP), welfare (PM-KISAN, Ration Card, E-Shram, ServicePlus 1784), or certificates (Income, Domicile, Caste), accurately identify the official portal and requirements.
-5. Determine:
-   - `matched_service_id`: clean short slug identifier (e.g. "pm_kisan", "vidyalakshmi", "1784", "jee_main", "up_income_cert", "maha_domicile")
-   - `service_name`: full official name of the scheme/service
-   - `portal_name`: official name of the portal/department
-   - `portal_url`: official web address of the scheme/portal
-   - `category`: "welfare" | "education" | "agriculture" | "health" | "general"
-   - `confidence`: float between 0.0 and 1.0 (clamped)
-   - `explanation`: concise one-line reason for the match
-   - `ai_advice`: friendly, detailed conversational advice for the citizen explaining eligibility, criteria, and next steps
-   - `suggested_documents`: array of required documents (e.g. ["income_certificate", "aadhaar", "marksheet", "land_record"])
-   - `can_automate`: boolean (true if automated form filling can be initiated)
-   - `cta_message`: action button label (e.g. "Launch AI Form Agent", "Route to Document Hub")
+You assist Indian citizens with national & state government schemes, portal navigation, and form automation.
+Analyze the citizen's query in English, Hindi, or Hinglish, and determine the correct interaction type:
 
-Respond STRICTLY with a valid JSON object matching this schema:
+1. `chat`: Casual greetings, compliments, or general questions ("hello", "namaste", "what can you do?", "how does this app work?", "thanks").
+   - Respond conversationally and warmly in `ai_advice`.
+   - Set `message_type`: "chat", `can_automate`: false.
+
+2. `why_portal` or `portal_dispute`: Citizen asks why a portal was chosen, or specifically demands a different portal:
+   - If asking "Why did you choose this portal?": Clearly explain in `ai_advice` and `reason_chosen` why that portal is the designated official authority.
+   - If citizen asks to use a specific portal (e.g. "Use UP e-district", "Use Rajasthan SSO sso.rajasthan.gov.in", "Use NTA website"):
+     Switch directly to that portal! Identify its official URL, list its required documents and form fields.
+   - Honest Limitation Disclosure: If the requested portal requires mandatory physical biometric verification at a CSC/Tehsil or cannot be fully automated online, clearly state this in `limitations` and `ai_advice` rather than making false claims.
+   - Set `message_type`: "ready_to_route".
+
+3. `ready_to_route`: Citizen explicitly asks to apply, register, or route ("Route me to ServicePlus", "Apply for JEE Main", "Let's fill this form", "Take me to application"):
+   - Prepare the application blueprint!
+   - Set `message_type`: "ready_to_route".
+   - Include exact `portal_name`, official `portal_url`, `reason_chosen`, `fields_to_fill`, `suggested_documents`, and `limitations`.
+
+4. `scheme_info`: Citizen is exploring or asking questions about a scheme/exam ("Tell me about PM-KISAN", "What is JEE Main 2027?", "How to get income certificate in UP?"):
+   - Provide comprehensive factual details in `ai_advice`: eligibility criteria, family income ceiling, key documents, and timeline.
+   - Set `message_type`: "scheme_info".
+
+You must respond STRICTLY with a valid JSON object matching this schema:
 {
+  "message_type": "chat" | "scheme_info" | "ready_to_route",
   "matched_service_id": "service_slug",
   "service_name": "Full Official Name of Scheme / Service",
   "portal_name": "Official Department / Portal Name",
   "portal_url": "https://portal.gov.in/service_path",
-  "category": "education",
+  "category": "education" | "welfare" | "agriculture" | "health" | "general",
   "confidence": 0.95,
-  "explanation": "Clear justification of how citizen query maps to this official portal.",
+  "explanation": "Concise summary justification",
+  "reason_chosen": "Detailed justification of why this portal is the designated authority",
+  "limitations": "Any mandatory physical CSC/biometric steps or null if 100% online",
+  "fields_to_fill": ["Applicant Name", "Father's Name", "Date of Birth", "Mobile Number", "State", "Address"],
   "ai_advice": "Detailed conversational response explaining the scheme, eligibility, requirements, and next steps.",
   "suggested_documents": ["marksheet", "aadhaar", "income_certificate"],
   "can_automate": true,
-  "cta_message": "Launch AI Form Agent"
+  "cta_message": "Proceed to Document Hub"
 }
 """
 
@@ -686,12 +695,19 @@ def _llm_classify_intent(raw_query: str) -> "IntentClassifyResponse | None":
             conf = 0.92
         conf = max(0.0, min(1.0, conf))
 
+        msg_type = str(raw_data.get("message_type") or "scheme_info")
         expl = str(raw_data.get("explanation") or f"AI matched intent to {raw_sid}.")
         raw_docs = raw_data.get("suggested_documents")
         docs = [str(d) for d in raw_docs] if isinstance(raw_docs, list) and raw_docs else ["income_certificate", "aadhaar"]
         advice = raw_data.get("ai_advice") or expl
         can_auto = bool(raw_data.get("can_automate", True))
-        cta = str(raw_data.get("cta_message") or "Launch Autonomous Form Agent")
+        cta = str(raw_data.get("cta_message") or "Proceed to Document Hub")
+        reason = raw_data.get("reason_chosen")
+        limits = raw_data.get("limitations")
+        raw_fields = raw_data.get("fields_to_fill")
+        fields = [str(f) for f in raw_fields] if isinstance(raw_fields, list) else [
+            "Applicant Name", "Father's Name", "Date of Birth", "Mobile Number", "Address", "State"
+        ]
 
         # 1. Known service from SERVICE_RULES
         if raw_sid in _VALID_SERVICE_IDS:
@@ -708,12 +724,16 @@ def _llm_classify_intent(raw_query: str) -> "IntentClassifyResponse | None":
                 ai_advice=advice,
                 can_automate=can_auto,
                 cta_message=cta,
+                message_type=msg_type,
+                reason_chosen=reason or f"Officially designated portal under Digital India ServicePlus framework for {svc_cfg['name']}.",
+                limitations=limits,
+                fields_to_fill=fields,
             )
 
         # 2. Dynamic zero-shot scheme discovered by LLM with valid metadata
         service_name = raw_data.get("service_name")
         portal_url = raw_data.get("portal_url")
-        if service_name and (portal_url or raw_data.get("portal_name")):
+        if service_name and (portal_url or raw_data.get("portal_name") or msg_type == "chat"):
             return IntentClassifyResponse(
                 matched_service_id=raw_sid,
                 service_name=str(service_name),
@@ -726,6 +746,10 @@ def _llm_classify_intent(raw_query: str) -> "IntentClassifyResponse | None":
                 ai_advice=advice,
                 can_automate=can_auto,
                 cta_message=cta,
+                message_type=msg_type,
+                reason_chosen=reason,
+                limitations=limits,
+                fields_to_fill=fields,
             )
 
         # 3. If invalid/unknown service ID with no portal metadata, reject (e.g. test_llm_invalid_service_id_falls_back)
@@ -764,31 +788,71 @@ def classify_citizen_intent(text: str) -> IntentClassifyResponse:
 
     raw_lower = raw.lower()
 
-    # 1. Check keyword fast-path with word boundaries
+    # 1. Check keyword fast-path with word boundaries (unless citizen is asking "why" or "what is")
+    is_why_or_meta_query = bool(re.search(r'\b(why|kyun|kyu|reason|explain why|kaise|who are you|hello|hi|hey|thanks|thank you)\b', raw_lower))
+
     best_service_id = None
     best_score = 0
     matched_reason = ""
 
-    for svc_id, data in _INTENT_KEYWORD_MAP.items():
-        score = 0
-        for kw in data["keywords"]:
-            if " " in kw:
-                if kw in raw_lower:
-                    score += 3
-            else:
-                # Word boundary match to prevent "ration" matching inside "registration"
-                if re.search(r'\b' + re.escape(kw) + r'\b', raw_lower):
-                    score += 2
-        if score > best_score:
-            best_score = score
-            best_service_id = svc_id
-            matched_reason = data["description"]
+    if not is_why_or_meta_query:
+        for svc_id, data in _INTENT_KEYWORD_MAP.items():
+            score = 0
+            for kw in data["keywords"]:
+                if " " in kw:
+                    if kw in raw_lower:
+                        score += 3
+                else:
+                    if re.search(r'\b' + re.escape(kw) + r'\b', raw_lower):
+                        score += 2
+            if score > best_score:
+                best_score = score
+                best_service_id = svc_id
+                matched_reason = data["description"]
 
-    # If we have a strong keyword match, return directly without LLM latency
+    # If we have a strong keyword match, return enriched config directly without LLM latency
     if best_service_id and best_score >= 2:
         svc_cfg = SERVICE_RULES.get(best_service_id, SERVICE_RULES["1784"])
         suggested_docs = _INTENT_KEYWORD_MAP.get(best_service_id, {}).get("default_docs", ["aadhaar"])
         conf = 0.95 if best_score >= 3 else 0.85
+        is_route_request = bool(re.search(r'\b(route|apply|register|fill|start|proceed|le jao|chalo)\b', raw_lower))
+        msg_type = "ready_to_route" if is_route_request else "scheme_info"
+
+        # Curated fields and justifications for our known catalog
+        catalog_metadata = {
+            "citizen_registration": {
+                "reason": "National ServicePlus (NIC) is the designated single-window portal for citizen self-registration across central & state services.",
+                "fields": ["Full Name", "Email Address", "Mobile Number", "Password", "State Domicile"],
+                "limitations": "100% online registration with instant OTP & CAPTCHA validation.",
+            },
+            "1784": {
+                "reason": "ServicePlus Form 1784 is the official digital portal for Building and Other Construction Workers (BOCW) welfare board registration.",
+                "fields": ["Applicant Full Name", "Father/Husband Name", "Date of Birth", "Mobile Number", "90-Day Physical Labor Declaration", "State"],
+                "limitations": "Requires valid 90-day physical construction work certificate from registered contractor.",
+            },
+            "vidyalakshmi": {
+                "reason": "Vidya Lakshmi is the official single-window portal developed by NSDL and Ministry of Education for student scholarships and loans.",
+                "fields": ["Student Full Name", "Date of Birth", "Email", "Mobile Number", "State", "Marksheet Percentage"],
+                "limitations": "100% online application; bank sanction is subject to college admission proof.",
+            },
+            "pm_kisan": {
+                "reason": "PM-KISAN portal (pmkisan.gov.in) is the official Ministry of Agriculture platform for ₹6,000/yr farmer DBT income support.",
+                "fields": ["Farmer Name", "Aadhaar Number", "Bank Account Number", "IFSC Code", "Land Khasra/Khatauni Details"],
+                "limitations": "Land title must be in the applicant's name in state land revenue records (Bhulekh).",
+            },
+            "ration_card": {
+                "reason": "National Food Security Portal (NFSA) is the official portal for subsidized food grains and ration card issuance.",
+                "fields": ["Head of Household Name", "Family Members List", "Aadhaar Numbers", "Annual Income", "Residential Address"],
+                "limitations": "Subject to family income verification under Antyodaya (AAY) or Priority Household (PHH) quotas.",
+            },
+        }
+
+        meta = catalog_metadata.get(best_service_id, {
+            "reason": f"Designated government portal under Digital India for {svc_cfg['name']}.",
+            "fields": ["Applicant Name", "Father's Name", "Date of Birth", "Mobile Number", "State", "Address"],
+            "limitations": None,
+        })
+
         return IntentClassifyResponse(
             matched_service_id=best_service_id,
             service_name=svc_cfg["name"],
@@ -798,9 +862,13 @@ def classify_citizen_intent(text: str) -> IntentClassifyResponse:
             confidence=conf,
             explanation=matched_reason,
             suggested_documents=suggested_docs,
-            ai_advice=f"Found matching official service: {svc_cfg['name']}. You can review the requirements and launch the autonomous agent to complete your application.",
+            ai_advice=f"I have identified the official portal for **{svc_cfg['name']}**. Review the required documents and form fields below, then click proceed to start attaching your documents.",
             can_automate=True,
-            cta_message=f"Apply for {svc_cfg['name']}",
+            cta_message=f"Proceed to Document Hub for {svc_cfg['name']}",
+            message_type=msg_type,
+            reason_chosen=meta["reason"],
+            limitations=meta.get("limitations"),
+            fields_to_fill=meta["fields"],
         )
 
     # 2. No strong keyword match → Call Groq LLM for semantic understanding

@@ -600,6 +600,22 @@ class IntentClassifyResponse(BaseModel):
         default="Launch Autonomous Form Agent",
         description="Suggested action button label to route the user into the application pipeline.",
     )
+    message_type: str = Field(
+        default="scheme_info",
+        description="Type of response: 'chat' (general conversation) | 'scheme_info' (advisory) | 'ready_to_route' (preparation blueprint).",
+    )
+    reason_chosen: Optional[str] = Field(
+        default=None,
+        description="Detailed explanation of why this specific government portal was selected.",
+    )
+    limitations: Optional[str] = Field(
+        default=None,
+        description="Any portal constraints or physical verification steps (honest AI disclosure).",
+    )
+    fields_to_fill: list[str] = Field(
+        default_factory=list,
+        description="Key form fields our browser agent will pre-fill on this portal.",
+    )
 
 
 
