@@ -181,24 +181,37 @@ _MONTH_MAP = {
 def _normalise_dob(raw: str) -> Optional[str]:
     """Convert various date strings to YYYY-MM-DD; return None on failure."""
     raw = raw.strip()
+    iso = None
     # Already ISO
     if re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw):
-        return raw
-    # DD/MM/YYYY or DD-MM-YYYY
-    m = re.fullmatch(r"(\d{2})[\/\-](\d{2})[\/\-](\d{4})", raw)
-    if m:
-        d, mo, y = m.group(1), m.group(2), m.group(3)
-        return f"{y}-{mo}-{d}"
-    # "12 Jan 1990" style
-    m = re.fullmatch(
-        r"(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})", raw
-    )
-    if m:
-        d_str, mon_str, y_str = m.group(1), m.group(2).lower(), m.group(3)
-        mo_num = _MONTH_MAP.get(mon_str)
-        if mo_num:
-            return f"{y_str}-{mo_num:02d}-{int(d_str):02d}"
-    return None
+        iso = raw
+    else:
+        # DD/MM/YYYY or DD-MM-YYYY
+        m = re.fullmatch(r"(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})", raw)
+        if m:
+            d, mo, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            if 1 <= mo <= 12 and 1 <= d <= 31:
+                iso = f"{y:04d}-{mo:02d}-{d:02d}"
+        else:
+            # "12 Jan 1990" style
+            m = re.fullmatch(
+                r"(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})", raw
+            )
+            if m:
+                d_str, mon_str, y_str = m.group(1), m.group(2).lower(), m.group(3)
+                mo_num = _MONTH_MAP.get(mon_str)
+                if mo_num:
+                    iso = f"{int(y_str):04d}-{mo_num:02d}-{int(d_str):02d}"
+    if not iso:
+        return None
+    try:
+        from datetime import date
+        parsed = date.fromisoformat(iso)
+        if parsed > date.today() or parsed.year < 1920 or parsed.year > (date.today().year - 3):
+            return None
+        return iso
+    except Exception:
+        return None
 
 
 def _parse_income(raw: str) -> Optional[int]:
@@ -689,6 +702,11 @@ def _norm_dob(v: _Optional[str]) -> _Optional[str]:
         return None
     if parsed > _date.today():   # reject future dates
         return None
+    # Reject recent years (e.g. within last 3 years) as DOB — in government forms/marksheets,
+    # recent dates are issue/declaration/printing dates, not applicant birth dates!
+    current_year = _date.today().year
+    if parsed.year > (current_year - 3) or parsed.year < 1920:
+        return None
     return iso
 
 
@@ -809,6 +827,8 @@ Guidelines:
 1. Citizen Full Name: Extract the primary individual/cardholder/applicant name. Identify the name from visual prominence and document context even if there is no "Name:" label.
 2. Parent / Guardian / Care-of Name: If a father, mother, spouse, or guardian is specified (e.g., C/O, S/O, D/O, W/O, Father's Name), put it in 'father_or_guardian_name'. Keep it distinct from the citizen's own name.
 3. Date of Birth: Format as YYYY-MM-DD.
+   - For Aadhaar cards: The DOB is stated as "DOB: DD/MM/YYYY" or "Year of Birth: YYYY". Aadhaar is the most authoritative identity source.
+   - For Marksheets & Certificates: Only extract the student's personal birth date if explicitly labeled (e.g. "Date of Birth" / "DOB"). NEVER extract certificate issue date, exam year/date, declaration date, or print date as Date of Birth! If student birth date is not explicitly labeled, output null for date_of_birth.
 4. Gender: Output "male", "female", or "other".
 5. Address: Extract full residential address into 'address_line'. Extract district, state, and 6-digit postal pincode.
 6. Mobile & Aadhaar: Extract 10-digit mobile number. For Aadhaar, extract ONLY the last 4 digits.

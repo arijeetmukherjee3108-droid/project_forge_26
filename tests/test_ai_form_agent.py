@@ -27,6 +27,7 @@ if str(BACKEND_DIR) not in sys.path:
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+import pytest
 from backend.app.schemas import CitizenProfile
 from backend.app.ai_form_agent import (
     distill_form_dom,
@@ -36,6 +37,7 @@ from backend.app.ai_form_agent import (
 )
 
 
+@pytest.mark.anyio
 async def test_dynamic_dom_reasoner():
     print("=" * 60)
     print("🧪 TESTING TASK 3: ZERO-SHOT DYNAMIC DOM REASONER")
@@ -44,7 +46,7 @@ async def test_dynamic_dom_reasoner():
     # 1. Test scanning the mock Rajasthan MSME portal
     mock_file = BACKEND_DIR / "static" / "rajmsme_mock.html"
     assert mock_file.exists(), f"Mock file not found: {mock_file}"
-    url = f"file://{mock_file.resolve()}"
+    url = mock_file.resolve().as_uri()
 
     profile = CitizenProfile(
         full_name="Ramesh Kumar Sharma",

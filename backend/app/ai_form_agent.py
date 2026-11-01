@@ -385,43 +385,45 @@ async def scan_portal_url(url: str, profile: Optional[CitizenProfile] = None) ->
 
         target_url = url.strip()
         navigated = False
+        nav_error = ""
 
-        if target_url.startswith(("http://", "https://", "file://")):
+        if target_url.startswith(("http://", "https://")):
             try:
-                await page.goto(target_url, wait_until="domcontentloaded", timeout=12000)
+                resp = await page.goto(target_url, wait_until="domcontentloaded", timeout=10000)
+                if resp and resp.status >= 400:
+                    navigated = False
+                    nav_error = f"HTTP {resp.status} - Government server error or invalid path"
+                else:
+                    navigated = True
+            except Exception as nav_err:
+                nav_error = str(nav_err)
+                logger.warning("Direct navigation to %s failed (%s).", target_url, nav_err)
+
+        elif target_url.startswith("file://"):
+            try:
+                await page.goto(target_url, wait_until="domcontentloaded")
                 navigated = True
             except Exception as nav_err:
-                logger.warning("Direct navigation to %s failed (%s). Checking local mock templates.", target_url, nav_err)
-                try:
-                    await page.close()
-                except Exception:
-                    pass
-                page = await context.new_page()
+                nav_error = str(nav_err)
 
         if not navigated:
-            # Fallback for offline development: ONLY match if URL explicitly references that template
-            static_dir = Path(__file__).resolve().parent.parent / "static"
-            cand_files = list(static_dir.glob("*.html")) if static_dir.exists() else []
-            target_file = None
-            for cf in cand_files:
-                if cf.stem.lower() in target_url.lower():
-                    target_file = cf
-                    break
-            if target_file:
-                await page.goto(f"file://{target_file.resolve()}", wait_until="domcontentloaded")
-            else:
-                # Do NOT randomly map an unreachable government portal to rajmsme income certificate mock!
-                logger.info("No matching local mock for %s; returning clean descriptor.", target_url)
-                return {
-                    "portal_url": target_url,
-                    "title": target_url,
-                    "fields": [],
-                    "required_documents": [],
-                    "required_documents_meta": [],
-                    "action_plan": [],
-                }
+            # If the remote government portal cannot be reached, DO NOT silently substitute a mock file!
+            # Report honest unreachable status to the user and frontend.
+            logger.warning("Government portal %s is unreachable / offline: %s", target_url, nav_error)
+            return {
+                "portal_url": target_url,
+                "title": f"Site Unreachable ({target_url})",
+                "fields": [],
+                "required_documents": [],
+                "required_documents_meta": [],
+                "action_plan": [],
+                "is_reachable": False,
+                "error_message": f"Government portal is offline or unresolvable ({nav_error or 'DNS/Server down'}).",
+            }
 
         blueprint = await scan_and_blueprint_page(page, profile)
+        blueprint["is_reachable"] = True
+        blueprint["error_message"] = None
         return blueprint
     finally:
         if browser:

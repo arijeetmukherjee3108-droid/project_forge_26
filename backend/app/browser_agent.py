@@ -419,37 +419,36 @@ async def start_application(
 
         # 1. Open government portal with resilient navigation
         navigated = False
-        if entry_url.startswith(("http://", "https://", "file://")):
+        nav_err_msg = ""
+        if entry_url.startswith(("http://", "https://")):
             try:
-                await page.goto(entry_url, timeout=12000, wait_until="domcontentloaded")
-                navigated = True
-                session.steps_completed.append(f"🌐 Navigated to {entry_url}")
+                resp = await page.goto(entry_url, timeout=10000, wait_until="domcontentloaded")
+                if resp and resp.status >= 400:
+                    navigated = False
+                    nav_err_msg = f"HTTP {resp.status} Government server error"
+                else:
+                    navigated = True
+                    session.steps_completed.append(f"🌐 Navigated to live portal: {entry_url}")
             except Exception as nav_err:
-                logger.warning("Direct navigation to %s failed (%s). Checking local mock templates.", entry_url, nav_err)
-                try:
-                    await page.close()
-                except Exception:
-                    pass
-                page = await context.new_page()
-                session.page = page
+                nav_err_msg = str(nav_err)
+                logger.warning("Direct navigation to %s failed (%s).", entry_url, nav_err)
+
+        elif entry_url.startswith("file://"):
+            try:
+                await page.goto(entry_url, wait_until="domcontentloaded")
+                navigated = True
+                session.steps_completed.append(f"🌐 Loaded local portal template: {entry_url}")
+            except Exception as nav_err:
+                nav_err_msg = str(nav_err)
 
         if not navigated:
-            static_dir = Path(__file__).resolve().parent.parent / "static"
-            cand_files = list(static_dir.glob("*.html")) if static_dir.exists() else []
-            target_file = None
-            for cf in cand_files:
-                if cf.stem.lower() in entry_url.lower() or entry_url.lower() in cf.stem.lower():
-                    target_file = cf
-                    break
-            if not target_file and cand_files:
-                target_file = cand_files[0]
-
-            if target_file:
-                fallback_file_url = f"file://{target_file.resolve()}"
-                await page.goto(fallback_file_url, wait_until="domcontentloaded")
-                session.steps_completed.append(f"🌐 Loaded local portal sandbox: {target_file.name}")
-            else:
-                session.steps_completed.append(f"🌐 Initialized session for {entry_url}")
+            # The official government portal is genuinely unreachable or down!
+            # Do NOT silently substitute a mock template and pretend it is live!
+            session.status = SessionStatus.ERROR
+            error_msg = f"Official government portal '{entry_url}' is currently unreachable or offline ({nav_err_msg}). The autonomous browser agent stopped."
+            session.steps_completed.append(f"❌ {error_msg}")
+            logger.error(error_msg)
+            return session
 
         # 2. Distill form DOM into compact ~400-token JSON
         distilled = await distill_form_dom(page)

@@ -643,7 +643,7 @@ _INTENT_KEYWORD_MAP: dict[str, dict] = {
         "keywords": [
             "construction", "labour", "labor", "worker", "shramik", "majdur",
             "mazdoor", "building worker", "welfare board", "certificate", "bhavan",
-            "construction worker", "unorganized", "karigar",
+            "construction worker", "unorganized", "karigar", "cwws", "construction worker welfare", "bocw",
         ],
         "default_docs": ["income_certificate", "aadhaar"],
         "description": "Matched construction / unorganized labour welfare certificate (Service 1784).",
@@ -674,7 +674,15 @@ _VALID_SERVICE_IDS = frozenset(SERVICE_RULES.keys())
 # ---------------------------------------------------------------------------
 
 _LLM_INTENT_SYSTEM_PROMPT = """You are an expert AI Indian GovTech Navigator and Scheme Advisor.
-You assist Indian citizens with national & state government schemes, portal navigation, and form automation.
+You assist Indian citizens with national & state government schemes, portal navigation, authentication workflows, and form automation.
+
+REALISTIC GOVERNMENT PORTAL MULTI-STAGE ARCHITECTURE:
+In India, virtually all official government portals (National Scholarship Portal scholarships.gov.in, Vidya Lakshmi vidyalakshmi.co.in, ServicePlus serviceonline.gov.in, DigiLocker, PM-Kisan, state SSO) require citizen authentication BEFORE allowing access to any application form. An anonymous citizen CANNOT jump straight to an internal form.
+Every citizen workflow proceeds through 3 structured stages:
+  1. Citizen Authentication Gateway: Citizen must either log in with existing credentials (Mobile/Aadhaar/Username + Password/OTP) or register a new citizen profile.
+  2. Scheme Application Form: Under the authenticated session, the citizen/agent navigates to the scheme-specific form and pre-fills verified profile data.
+  3. Final Verification & Human Checkpoint: Solve CAPTCHA, attach verified documents, and confirm submission.
+
 Analyze the citizen's query in English, Hindi, or Hinglish, and determine the correct interaction type:
 
 1. `chat`: Casual greetings, compliments, or general questions ("hello", "namaste", "what can you do?", "how does this app work?", "thanks").
@@ -685,22 +693,28 @@ Analyze the citizen's query in English, Hindi, or Hinglish, and determine the co
    - If asking "Why did you choose this portal?": Clearly explain in `ai_advice` and `reason_chosen` why that portal is the designated official authority.
    - If citizen asks to use a specific portal (e.g. "Use UP e-district", "Use Rajasthan SSO sso.rajasthan.gov.in", "Use NTA website"):
      Switch directly to that portal! Identify its official URL, list its required documents and form fields.
-   - Honest Limitation Disclosure: If the requested portal requires mandatory physical biometric verification at a CSC/Tehsil or cannot be fully automated online, clearly state this in `limitations` and `ai_advice` rather than making false claims.
+   - Honest Limitation Disclosure: If the requested portal requires mandatory physical biometric verification at a CSC/Tehsil or cannot be fully automated online, clearly state this in `limitations` and `ai_advice`.
    - Set `message_type`: "ready_to_route".
 
 3. `ready_to_route`: Citizen explicitly asks to apply, register, or route ("Route me to ServicePlus", "Apply for JEE Main", "Let's fill this form", "Take me to application"):
    - Prepare the application blueprint!
    - Set `message_type`: "ready_to_route".
-   - Include exact `portal_name`, official `portal_url`, `reason_chosen`, `fields_to_fill`, `suggested_documents`, and `limitations`.
+   - Include exact `portal_name`, official `portal_url`, `login_url`, `requires_login`, `workflow_steps`, `reason_chosen`, `fields_to_fill`, `suggested_documents`, and `limitations`.
    - IMPORTANT: If the process does NOT require document file uploads (e.g. DigiLocker account registration, basic citizen signup, voter search, status tracking), set `suggested_documents: []` and `cta_message: "Proceed to Verification"`.
 
-
-4. `scheme_info`: Citizen is exploring or asking questions about a scheme/exam ("Tell me about PMJAY / Ayushman Bharat", "What is PM-KISAN?", "What is JEE Main 2027?", "How to get income certificate in UP?"):
+4. `scheme_info`: Citizen is exploring or asking questions about a scheme/exam ("Tell me about PMJAY / Ayushman Bharat", "What is PM-KISAN?", "What is JEE Main 2027?", "How to get scholarship?"):
    - Provide comprehensive factual details in `ai_advice`: eligibility criteria, family income ceiling, key documents, and timeline.
-   - Propose Agent Takeover: At the end of `ai_advice`, ALWAYS politely propose that our autonomous AI Form Agent can take over and complete the application for them on the official portal (e.g. "Would you like our autonomous AI Form Agent to take over and complete your registration on the official portal? You can click the button below to launch the agent!").
-   - Set `message_type`: "scheme_info".
-   - Set `can_automate`: true.
-   - Set `cta_message`: "Launch AI Agent & Fill Application".
+   - Explicitly inform the citizen that the first step will be authenticating/logging into the official portal, followed by auto-filling the scheme form.
+   - Propose Agent Takeover: Propose that our autonomous AI Form Agent can log them in and complete their application.
+   - Set `message_type`: "scheme_info", `can_automate`: true, `cta_message`: "Launch AI Agent & Fill Application".
+
+CRITICAL ANTI-HALLUCINATION RULES FOR OFFICIAL PORTAL URLS:
+- National Scholarship Portal (NSP): "https://scholarships.gov.in/" (Registration: "https://scholarships.gov.in/fresh/newstdRegfrmInstruction", Login: "https://scholarships.gov.in/renew/loginPage"). NEVER combine with other names like 'scholarships.gov.in/vidyalakshmi'!
+- Vidya Lakshmi: "https://www.vidyalakshmi.co.in/Students/login" (Registration: "https://www.vidyalakshmi.co.in/Students/signup").
+- ServicePlus (BOCW / Welfare / Form 1784): "https://serviceonline.gov.in/citizenRegistration.html" (Login: "https://serviceonline.gov.in/login.do").
+- DigiLocker: "https://www.digilocker.gov.in/signin" (Registration: "https://www.digilocker.gov.in/dashboard/registration").
+- PM-KISAN: "https://pmkisan.gov.in/".
+- Never invent domains like 'cwws.gov.in'. Always output real official government portals.
 
 You must respond STRICTLY with a valid JSON object matching this schema:
 {
@@ -709,13 +723,20 @@ You must respond STRICTLY with a valid JSON object matching this schema:
   "service_name": "Full Official Name of Scheme / Service",
   "portal_name": "Official Department / Portal Name",
   "portal_url": "https://portal.gov.in/service_path",
+  "requires_login": true,
+  "login_url": "https://portal.gov.in/login_path",
+  "workflow_steps": [
+    "1. Citizen Portal Authentication & Sign-In",
+    "2. Scheme Application Form",
+    "3. CAPTCHA Verification & Final Submission"
+  ],
   "category": "education" | "welfare" | "agriculture" | "health" | "general",
   "confidence": 0.95,
   "explanation": "Concise summary justification",
   "reason_chosen": "Detailed justification of why this portal is the designated authority",
   "limitations": "Any mandatory physical CSC/biometric steps or null if 100% online",
   "fields_to_fill": ["Applicant Name", "Father's Name", "Date of Birth", "Mobile Number", "State", "Address"],
-  "ai_advice": "Detailed conversational response explaining the scheme, eligibility, requirements, and next steps.",
+  "ai_advice": "Detailed conversational response explaining the scheme, multi-step portal login & application process, and next steps.",
   "suggested_documents": ["marksheet", "aadhaar", "income_certificate"],
   "can_automate": true,
   "cta_message": "Proceed to Document Hub"
@@ -767,6 +788,13 @@ def _llm_classify_intent(raw_query: str) -> "IntentClassifyResponse | None":
         fields = [str(f) for f in raw_fields] if isinstance(raw_fields, list) else [
             "Applicant Name", "Father's Name", "Date of Birth", "Mobile Number", "Address", "State"
         ]
+        requires_login = bool(raw_data.get("requires_login", True))
+        login_url = raw_data.get("login_url") or raw_data.get("portal_url")
+        workflow_steps = raw_data.get("workflow_steps") or [
+            "1. Citizen Portal Authentication & Sign-In",
+            "2. Scheme Application Form",
+            "3. CAPTCHA Verification & Final Submission",
+        ]
 
         # 1. Conversational chat, greetings, or assistant capability questions
         if msg_type == "chat" or not raw_sid or raw_sid in {"none", "null", "general", "chat", "general_chat"}:
@@ -796,6 +824,9 @@ def _llm_classify_intent(raw_query: str) -> "IntentClassifyResponse | None":
                 service_name=svc_cfg["name"],
                 portal_name=str(raw_data.get("portal_name") or svc_cfg["name"]),
                 portal_url=str(raw_data.get("portal_url") or "https://serviceonline.gov.in/citizenRegistration.html"),
+                requires_login=requires_login,
+                login_url=login_url or str(raw_data.get("portal_url") or "https://serviceonline.gov.in/citizenRegistration.html"),
+                workflow_steps=workflow_steps,
                 category=str(raw_data.get("category") or "welfare"),
                 confidence=conf,
                 explanation=expl,
@@ -818,6 +849,9 @@ def _llm_classify_intent(raw_query: str) -> "IntentClassifyResponse | None":
                 service_name=str(service_name),
                 portal_name=str(raw_data.get("portal_name") or service_name),
                 portal_url=str(portal_url or "https://india.gov.in"),
+                requires_login=requires_login,
+                login_url=login_url or str(portal_url or "https://india.gov.in"),
+                workflow_steps=workflow_steps,
                 category=str(raw_data.get("category") or "general"),
                 confidence=conf,
                 explanation=expl,

@@ -35,6 +35,9 @@ export interface BackendIntentClassifyResponse {
   reason_chosen?: string;
   limitations?: string;
   fields_to_fill?: string[];
+  requires_login?: boolean;
+  login_url?: string;
+  workflow_steps?: string[];
 }
 
 /**
@@ -47,7 +50,7 @@ export const KNOWN_SERVICES_CATALOG: IntentClassificationResponse[] = [
     service_name: 'Vidya Lakshmi — Higher Education Loan & Scholarship Portal',
     portal_id: 'VIDYA_LAKSHMI_PORTAL',
     portal_name: 'Vidya Lakshmi Portal (Ministry of Education & NSDL)',
-    portal_url: 'https://www.vidyalakshmi.co.in/Students/',
+    portal_url: 'https://www.vidyalakshmi.co.in/Students/login',
     category: 'education',
     required_documents: ['High School Marksheet', 'College Admission Proof', 'Income Certificate'],
     confidence: 0.95,
@@ -205,6 +208,13 @@ export const classifyIntent = async (query: string): Promise<IntentClassificatio
         reason_chosen: b.reason_chosen,
         limitations: b.limitations,
         fields_to_fill: b.fields_to_fill || [],
+        requires_login: b.requires_login ?? true,
+        login_url: b.login_url || b.portal_url,
+        workflow_steps: b.workflow_steps || [
+          '1. Citizen Portal Authentication & Sign-In',
+          '2. Scheme Application Form',
+          '3. CAPTCHA Verification & Final Submission',
+        ],
       };
     }
   } catch (err) {

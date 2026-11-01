@@ -616,6 +616,22 @@ class IntentClassifyResponse(BaseModel):
         default_factory=list,
         description="Key form fields our browser agent will pre-fill on this portal.",
     )
+    requires_login: bool = Field(
+        default=True,
+        description="Whether this government portal requires citizen login/authentication before accessing the application form.",
+    )
+    login_url: Optional[str] = Field(
+        default=None,
+        description="Direct URL to citizen login / authentication page on this portal.",
+    )
+    workflow_steps: list[str] = Field(
+        default_factory=lambda: [
+            "1. Portal Authentication & Citizen Sign-In",
+            "2. Scheme Application Form",
+            "3. CAPTCHA Verification & Submission",
+        ],
+        description="Ordered sequence of steps required on this government portal.",
+    )
 
 
 
@@ -664,3 +680,5 @@ class DynamicScanResponse(BaseModel):
     required_documents: list[str] = Field(default_factory=list)
     required_documents_meta: list[dict] = Field(default_factory=list)
     action_plan: list[DynamicActionPlanItem] = Field(default_factory=list)
+    is_reachable: bool = True
+    error_message: Optional[str] = None
