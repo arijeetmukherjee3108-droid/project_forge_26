@@ -247,8 +247,8 @@ const MOCK_AGENT_STEPS: { action: string; field: MockPortalField }[] = [
   { action: '🔒 [PAUSE] Captcha detected. Cropped and waiting for citizen approval.', field: { label: '', value: '', type: 'text' } },
 ];
 
-// ── Bug 6: Domain Categorized Suggestions & Dynamic Prompt Pills ───────────────
-export type DomainCategory = 'all' | 'education' | 'welfare' | 'certificates' | 'agriculture' | 'health';
+// ── Bug 6 & Phase 2: Domain Categorized Suggestions & Conversational Chat ──
+export type DomainCategory = 'education' | 'agriculture' | 'welfare' | 'certificates' | 'health';
 
 export interface DomainMeta {
   id: DomainCategory;
@@ -257,11 +257,10 @@ export interface DomainMeta {
 }
 
 export const DOMAIN_CATEGORIES: DomainMeta[] = [
-  { id: 'all', label: 'All Schemes', icon: '🌟' },
   { id: 'education', label: 'Education / Scholarships', icon: '🎓' },
+  { id: 'agriculture', label: 'Agriculture / Farmers', icon: '🌾' },
   { id: 'welfare', label: 'Welfare / Pensions', icon: '🏛️' },
   { id: 'certificates', label: 'Certificates & Domicile', icon: '📜' },
-  { id: 'agriculture', label: 'Agriculture / Farmers', icon: '🌾' },
   { id: 'health', label: 'Healthcare', icon: '🏥' },
 ];
 
@@ -270,6 +269,17 @@ export interface DomainSuggestionItem {
   text: string;
   domain: 'education' | 'welfare' | 'certificates' | 'agriculture' | 'health';
   domainLabel: string;
+  badge?: string;
+  subtitle?: string;
+}
+
+export interface ChatMessage {
+  id: string;
+  sender: 'user' | 'assistant';
+  text: string;
+  timestamp: string;
+  schemeMatch?: IntentClassificationResponse;
+  canRoute?: boolean;
 }
 
 export const DOMAIN_SUGGESTIONS: Record<'apply' | 'eligibility', DomainSuggestionItem[]> = {
@@ -451,12 +461,16 @@ const App: React.FC = () => {
   // Step 1: Intent
   const [intent, setIntent] = useState('');
   const [isListening, setIsListening] = useState(false);
-  const [selectedDomain, setSelectedDomain] = useState<DomainCategory>('all');
+  const recognitionRef = useRef<any>(null);
+  const [selectedDomain, setSelectedDomain] = useState<DomainCategory>('education');
+  const [advisorChat, setAdvisorChat] = useState<ChatMessage[]>([]);
   const [promptIndex, setPromptIndex] = useState(0);
   const [fadeState, setFadeState] = useState(true);
   const [selectedService, setSelectedService] = useState<IntentClassificationResponse | null>(null);
   const [isClassifying, setIsClassifying] = useState(false);
   const [showSchemePicker, setShowSchemePicker] = useState(false);
+  const [isNavigatingToDocs, setIsNavigatingToDocs] = useState(false);
+  const [navStepText, setNavStepText] = useState('');
 
   // Task 3: Zero-Shot Dynamic DOM Reasoner state
   const [dynamicBlueprint, setDynamicBlueprint] = useState<DynamicScanResponse | null>(null);
@@ -490,9 +504,6 @@ const App: React.FC = () => {
   // Filtered prompts for rotating capsule placeholder
   const activePrompts = useMemo(() => {
     const list = DOMAIN_SUGGESTIONS[activeMode] || [];
-    if (selectedDomain === 'all') {
-      return list.map((item) => item.text);
-    }
     const filtered = list.filter((item) => item.domain === selectedDomain);
     return filtered.length > 0 ? filtered.map((item) => item.text) : list.map((item) => item.text);
   }, [activeMode, selectedDomain]);
@@ -622,7 +633,24 @@ const App: React.FC = () => {
     setCurrentStep(targetStep);
   };
 
-  // Web Speech API for the microphone icon
+  // Clean up any ongoing Web Speech API or SpeechSynthesis sessions on unmount
+  useEffect(() => {
+    return () => {
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.abort();
+        } catch {}
+        recognitionRef.current = null;
+      }
+      if ('speechSynthesis' in window) {
+        try {
+          window.speechSynthesis.cancel();
+        } catch {}
+      }
+    };
+  }, []);
+
+  // Web Speech API for the microphone icon (with safe lifecycle management)
   const handleToggleVoice = () => {
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SpeechRecognition) {
@@ -630,11 +658,18 @@ const App: React.FC = () => {
       return;
     }
     if (isListening) {
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.abort();
+        } catch {}
+        recognitionRef.current = null;
+      }
       setIsListening(false);
       return;
     }
     try {
       const recognition = new SpeechRecognition();
+      recognitionRef.current = recognition;
       recognition.lang = 'en-IN';
       recognition.interimResults = false;
       recognition.onstart = () => {
@@ -645,53 +680,140 @@ const App: React.FC = () => {
         const transcript = event.results[0][0].transcript;
         setIntent(transcript);
         setIsListening(false);
+        recognitionRef.current = null;
         showToast(`Heard: "${transcript}"`, 'success');
       };
       recognition.onerror = () => {
         setIsListening(false);
+        recognitionRef.current = null;
         showToast('Voice input error. Try typing.', 'error');
       };
-      recognition.onend = () => setIsListening(false);
+      recognition.onend = () => {
+        setIsListening(false);
+        recognitionRef.current = null;
+      };
       recognition.start();
     } catch {
       setIsListening(false);
+      recognitionRef.current = null;
+    }
+  };
+
+  const handleProceedToApplication = async (scheme?: IntentClassificationResponse | null) => {
+    const target = scheme || selectedService;
+    if (!target) {
+      showToast('Please select or describe a scheme first.', 'error');
+      return;
+    }
+
+    setIsNavigatingToDocs(true);
+    setNavStepText(`Connecting to ${target.portal_name || 'official portal'}...`);
+
+    setSelectedService(target);
+    setProfile((prev) => ({
+      ...prev,
+      target_intent: target.service_name,
+      target_service_id: target.service_id,
+      target_service_name: target.service_name,
+      target_portal_id: target.portal_id,
+      target_portal_name: target.portal_name,
+      target_portal_url: target.portal_url,
+      required_documents_list: target.required_documents,
+    }));
+
+    // Seed Google Vault query with the first required document
+    if (target.required_documents && target.required_documents.length > 0) {
+      const firstDoc = target.required_documents[0].toLowerCase();
+      if (firstDoc.includes('income')) setVaultQuery('income');
+      else if (firstDoc.includes('marksheet') || firstDoc.includes('10th') || firstDoc.includes('12th')) setVaultQuery('marksheet');
+      else if (firstDoc.includes('aadhaar')) setVaultQuery('aadhaar');
+      else if (firstDoc.includes('land') || firstDoc.includes('khasra')) setVaultQuery('land record');
+      else setVaultQuery(target.required_documents[0]);
+    }
+
+    try {
+      const isKnownFastPath = target.service_id === '1784' || target.service_id === 'vidyalakshmi' || target.service_id === 'citizen_registration';
+      if (!isKnownFastPath && (target.portal_url || target.service_id)) {
+        setNavStepText(`AI Form Agent is scanning live portal DOM and discovering required fields & upload slots...`);
+        await scanPortal(target.portal_url || target.service_id);
+      }
+      setNavStepText(`Application pipeline prepared! Opening Document Hub...`);
+      await new Promise((r) => setTimeout(r, 600));
+      setCurrentStep(2);
+    } catch (err) {
+      console.warn('Navigation scan error:', err);
+      setCurrentStep(2);
+    } finally {
+      setIsNavigatingToDocs(false);
+      setNavStepText('');
     }
   };
 
   const handleIntentSubmit = async (textToUse?: string) => {
-    const query = textToUse || intent;
-    if (!query.trim()) {
+    const query = (textToUse || intent).trim();
+    if (!query) {
       showToast('Please type or speak what service you need.', 'error');
       return;
     }
-    setIsClassifying(true);
-    try {
-      // 1. Send query directly to Groq LLM for zero-shot intent reasoning
-      const match = await classifyIntent(query);
-      setSelectedService(match);
-      setProfile((prev) => ({
-        ...prev,
-        target_intent: query,
-        target_service_id: match.service_id,
-        target_service_name: match.service_name,
-        target_portal_id: match.portal_id,
-        target_portal_name: match.portal_name,
-        target_portal_url: match.portal_url,
-        required_documents_list: match.required_documents,
-      }));
 
-      // 2. If it's an unmapped portal form (not fast-path), scan the DOM live!
-      const isKnownFastPath = match.service_id === '1784' || match.service_id === 'vidyalakshmi' || match.service_id === 'citizen_registration';
-      if (!isKnownFastPath && (match.portal_url || match.service_id)) {
-        showToast(`AI analyzing live portal DOM for ${match.service_name}...`, 'info');
-        await scanPortal(match.portal_url || match.service_id);
+    // Only direct navigation confirmations advance immediately without asking the AI
+    const isDirectNavConfirmation = /^(proceed|go to documents|next page|take me to upload|upload documents|let's go|open document hub)$/i.test(query);
+    if (isDirectNavConfirmation && selectedService) {
+      handleProceedToApplication(selectedService);
+      return;
+    }
+
+    // 1. Add citizen message to chat stream
+    const userMsg: ChatMessage = {
+      id: `user-${Date.now()}`,
+      sender: 'user',
+      text: query,
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    };
+    setAdvisorChat((prev) => [...prev, userMsg]);
+    setIntent('');
+    setIsClassifying(true);
+
+    try {
+      // 2. Query AI GovTech Advisor for zero-shot intent reasoning & conversational guidance
+      const match = await classifyIntent(query);
+      const isChatOnly = match.message_type === 'chat' || match.service_id === 'general_chat';
+      if (!isChatOnly) {
+        setSelectedService(match);
+        setProfile((prev) => ({
+          ...prev,
+          target_intent: query,
+          target_service_id: match.service_id,
+          target_service_name: match.service_name,
+          target_portal_id: match.portal_id,
+          target_portal_name: match.portal_name,
+          target_portal_url: match.portal_url,
+          required_documents_list: match.required_documents,
+        }));
       }
 
-      showToast(`AI routed to: ${match.service_name}`, 'success');
-      setCurrentStep(2);
+      // 3. Add AI advisor response
+      const adviceContent = match.ai_advice || match.description || `Here are the official guidelines for ${match.service_name}.`;
+      const assistantMsg: ChatMessage = {
+        id: `assist-${Date.now()}`,
+        sender: 'assistant',
+        text: adviceContent,
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        schemeMatch: !isChatOnly ? match : undefined,
+        canRoute: !isChatOnly && (match.can_automate ?? true),
+      };
+      setAdvisorChat((prev) => [...prev, assistantMsg]);
     } catch {
-      showToast('Analyzing intent with fallback catalog.', 'info');
-      setCurrentStep(2);
+      showToast('Error connecting to advisor. Please try again.', 'error');
+      const fallbackMsg: ChatMessage = {
+        id: `assist-${Date.now()}`,
+        sender: 'assistant',
+        text: 'I found matching services in our verified government catalog. You can review the details or select a scheme below.',
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        schemeMatch: selectedService || undefined,
+        canRoute: true,
+      };
+      setAdvisorChat((prev) => [...prev, fallbackMsg]);
     } finally {
       setIsClassifying(false);
     }
@@ -711,12 +833,16 @@ const App: React.FC = () => {
       target_portal_url: scheme.portal_url,
       required_documents_list: scheme.required_documents,
     }));
-    const isKnownFastPath = scheme.service_id === '1784' || scheme.service_id === 'vidyalakshmi' || scheme.service_id === 'citizen_registration';
-    if (!isKnownFastPath && (scheme.portal_url || scheme.service_id)) {
-      scanPortal(scheme.portal_url || scheme.service_id);
-    }
+    const switchMsg: ChatMessage = {
+      id: `assist-${Date.now()}`,
+      sender: 'assistant',
+      text: `Switched target scheme to **${scheme.service_name}**. When you're ready, click below to launch the autonomous agent!`,
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      schemeMatch: scheme,
+      canRoute: true,
+    };
+    setAdvisorChat((prev) => [...prev, switchMsg]);
     showToast(`Switched scheme to ${scheme.service_name}`, 'info');
-    setCurrentStep(2);
   };
 
   // File Upload Handlers
@@ -1346,210 +1472,378 @@ const App: React.FC = () => {
 
         <div className={`gemini-container ${currentStep === 4 ? 'wide' : ''}`}>
           {/* ════════════════════════════════════════
-              STEP 1: GEMINI HERO / PROMPT VIEW
+              STEP 1: GEMINI HERO / PROMPT VIEW / AI ADVISOR CHAT
           ════════════════════════════════════════ */}
           {currentStep === 1 && (
-            <div className="gemini-hero">
-              <h1 className="hero-heading">Where should we start?</h1>
+            <>
+              {advisorChat.length === 0 ? (
+                <div className="gemini-hero">
+                  <h1 className="hero-heading">Where should we start?</h1>
+                  <p style={{ color: '#94a3b8', fontSize: '0.92rem', marginTop: '-0.5rem', marginBottom: '1.25rem', maxWidth: '640px' }}>
+                    Ask our AI GovTech Advisor any question about government schemes, eligibility rules, or launch automated portal applications.
+                  </p>
 
-              {/* Pill Prompt Capsule */}
-              <div className="gemini-search-capsule">
-                <div className="capsule-input-container">
-                  <input
-                    className="capsule-input"
-                    type="text"
-                    value={intent}
-                    onChange={(e) => setIntent(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && handleIntentSubmit()}
-                  />
-                  {!intent && (
-                    <div className={`capsule-animated-placeholder ${fadeState ? 'fade-in' : 'fade-out'}`}>
-                      {activePrompts[promptIndex % (activePrompts.length || 1)]}
+                  {/* Pill Prompt Capsule */}
+                  <div className="gemini-search-capsule">
+                    <div className="capsule-input-container">
+                      <input
+                        className="capsule-input"
+                        type="text"
+                        value={intent}
+                        onChange={(e) => setIntent(e.target.value)}
+                        onKeyDown={(e) => e.key === 'Enter' && handleIntentSubmit()}
+                      />
+                      {!intent && (
+                        <div className={`capsule-animated-placeholder ${fadeState ? 'fade-in' : 'fade-out'}`}>
+                          {activePrompts[promptIndex % (activePrompts.length || 1)]}
+                        </div>
+                      )}
                     </div>
-                  )}
-                </div>
 
-                <div className="capsule-actions">
-                  <button
-                    className={`capsule-icon-btn ${isListening ? 'recording' : ''}`}
-                    onClick={handleToggleVoice}
-                    title="Speak using Web Speech API"
-                  >
-                    <Icons.Mic />
-                  </button>
+                    <div className="capsule-actions">
+                      <button
+                        className={`capsule-icon-btn ${isListening ? 'recording' : ''}`}
+                        onClick={handleToggleVoice}
+                        title="Speak using Web Speech API"
+                      >
+                        <Icons.Mic />
+                      </button>
 
-                  <button
-                    className="capsule-submit-btn"
-                    disabled={!intent.trim()}
-                    onClick={() => handleIntentSubmit()}
-                    title="Send"
-                  >
-                    <Icons.ArrowUp />
-                  </button>
-                </div>
-              </div>
+                      <button
+                        className="capsule-submit-btn"
+                        disabled={!intent.trim()}
+                        onClick={() => handleIntentSubmit()}
+                        title="Send"
+                      >
+                        <Icons.ArrowUp />
+                      </button>
+                    </div>
+                  </div>
 
-              {/* Mode Pills (Auto-Apply vs Check Eligibility) */}
-              <div className="gemini-mode-pills">
-                <button
-                  type="button"
-                  className={`mode-pill ${activeMode === 'apply' ? 'active' : ''}`}
-                  onClick={() => {
-                    setActiveMode('apply');
-                    setPromptIndex(0);
-                  }}
-                  title="Directly automate submission on official portals with AI Agent"
-                >
-                  ⚡ Auto-Apply
-                </button>
-                <button
-                  type="button"
-                  className={`mode-pill ${activeMode === 'eligibility' ? 'active' : ''}`}
-                  onClick={() => {
-                    setActiveMode('eligibility');
-                    setPromptIndex(0);
-                  }}
-                  title="Verify criteria, income limits, and required documents before applying"
-                >
-                  🔍 Check Eligibility
-                </button>
-              </div>
-
-              {/* Bug 6: Dynamic Domain Category Filter Pills */}
-              <div className="gemini-domain-pills">
-                {DOMAIN_CATEGORIES.map((cat) => (
-                  <button
-                    key={cat.id}
-                    type="button"
-                    className={`domain-pill ${cat.id} ${selectedDomain === cat.id ? 'active' : ''}`}
-                    onClick={() => {
-                      setSelectedDomain(cat.id);
-                      setPromptIndex(0);
-                    }}
-                  >
-                    <span>{cat.icon}</span>
-                    <span>{cat.label}</span>
-                  </button>
-                ))}
-              </div>
-
-              {/* Suggestion Rows (Categorized by Domain with Category Badges) */}
-              <div className="gemini-suggestions">
-                {DOMAIN_SUGGESTIONS[activeMode]
-                  .filter((item) => selectedDomain === 'all' || item.domain === selectedDomain)
-                  .map((item, idx) => (
+                  {/* Mode Pills (Auto-Apply vs Check Eligibility) */}
+                  <div className="gemini-mode-pills">
                     <button
-                      key={idx}
                       type="button"
-                      className="suggestion-row"
+                      className={`mode-pill ${activeMode === 'apply' ? 'active' : ''}`}
                       onClick={() => {
-                        setIntent(item.text);
-                        handleIntentSubmit(item.text);
+                        setActiveMode('apply');
+                        setPromptIndex(0);
                       }}
+                      title="Directly automate submission on official portals with AI Agent"
                     >
-                      <span className="suggestion-lead-icon">
-                        {item.iconType === 'briefcase' && <Icons.Briefcase />}
-                        {item.iconType === 'sparkles' && <Icons.Sparkles />}
-                        {item.iconType === 'book' && <Icons.BookIdea />}
-                      </span>
-                      <span className="suggestion-text">{item.text}</span>
-                      <span className={`scheme-category-badge ${item.domain}`}>
-                        {item.domainLabel}
-                      </span>
+                      ⚡ Auto-Apply
                     </button>
-                  ))}
-              </div>
-
-              {/* Dynamic Intent Match Card (Bugs 1 & 2) */}
-              {isClassifying && (
-                <div style={{ marginTop: '1.25rem', color: '#94a3b8', fontSize: '0.88rem', display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-                  <div className="hunting-spinner" style={{ width: '16px', height: '16px' }} />
-                  <span>AI matching citizen request against official scheme catalog...</span>
-                </div>
-              )}
-
-              {selectedService && !isClassifying && (
-                <div className="matched-scheme-card">
-                  <div className="scheme-card-header">
-                    <div className="scheme-title-row">
-                      <span style={{ fontSize: '1.3rem' }}>
-                        {selectedService.category === 'education' && '🎓'}
-                        {selectedService.category === 'welfare' && '🏗️'}
-                        {selectedService.category === 'agriculture' && '🌾'}
-                        {selectedService.category === 'health' && '🏥'}
-                        {selectedService.category === 'general' && '🏛️'}
-                      </span>
-                      <h3 className="scheme-title">{selectedService.service_name}</h3>
-                    </div>
-                    <span className={`scheme-category-badge ${selectedService.category}`}>
-                      {selectedService.category}
-                    </span>
-                  </div>
-
-                  <div className="scheme-portal-info">
-                    <span>🏛️ Target: <strong>{selectedService.portal_name}</strong></span>
-                    <span>•</span>
-                    <a
-                      href={selectedService.portal_url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      style={{ color: '#38bdf8', textDecoration: 'none' }}
+                    <button
+                      type="button"
+                      className={`mode-pill ${activeMode === 'eligibility' ? 'active' : ''}`}
+                      onClick={() => {
+                        setActiveMode('eligibility');
+                        setPromptIndex(0);
+                      }}
+                      title="Verify criteria, income limits, and required documents before applying"
                     >
-                      {new URL(selectedService.portal_url).hostname} ↗
-                    </a>
+                      🔍 Check Eligibility
+                    </button>
                   </div>
 
-                  <div className="scheme-desc">{selectedService.description}</div>
-
-                  <div className="scheme-docs-section">
-                    <span className="scheme-docs-label">Required Documents:</span>
-                    {selectedService.required_documents.map((doc, i) => (
-                      <span key={i} className="scheme-doc-pill">📎 {doc}</span>
+                  {/* Dynamic Domain Category Filter Pills */}
+                  <div className="gemini-domain-pills">
+                    {DOMAIN_CATEGORIES.map((cat) => (
+                      <button
+                        key={cat.id}
+                        type="button"
+                        className={`domain-pill ${cat.id} ${selectedDomain === cat.id ? 'active' : ''}`}
+                        onClick={() => {
+                          setSelectedDomain(cat.id);
+                          setPromptIndex(0);
+                        }}
+                      >
+                        <span>{cat.icon}</span>
+                        <span>{cat.label}</span>
+                      </button>
                     ))}
                   </div>
 
-                  <div className="scheme-actions-row">
+                  {/* Clean Human-Designed 2-Column Scheme Cards Grid (No vertical messy list) */}
+                  <div className="gemini-suggestions-grid">
+                    {DOMAIN_SUGGESTIONS[activeMode]
+                      .filter((item) => item.domain === selectedDomain)
+                      .map((item, idx) => (
+                        <div
+                          key={idx}
+                          className="scheme-suggest-card"
+                          onClick={() => {
+                            setIntent(item.text);
+                            handleIntentSubmit(item.text);
+                          }}
+                        >
+                          <div className="scheme-suggest-header">
+                            <span className="scheme-suggest-icon">
+                              {item.iconType === 'briefcase' && <Icons.Briefcase />}
+                              {item.iconType === 'sparkles' && <Icons.Sparkles />}
+                              {item.iconType === 'book' && <Icons.BookIdea />}
+                            </span>
+                            <span className={`scheme-category-badge ${item.domain}`}>
+                              {item.domainLabel}
+                            </span>
+                          </div>
+                          <div className="scheme-suggest-title">{item.text}</div>
+                          <div className="scheme-suggest-footer">
+                            <span>💬 Ask AI Advisor</span>
+                            <span>→</span>
+                          </div>
+                        </div>
+                      ))}
+                  </div>
+                </div>
+              ) : (
+                /* Step 1 Conversational AI Advisor Chat Interface */
+                <div className="advisor-chat-container">
+                  <div className="advisor-chat-header">
+                    <div className="advisor-header-title">
+                      <span style={{ fontSize: '1.25rem' }}>🤖</span>
+                      <div>
+                        <div style={{ fontWeight: 600, color: '#f8fafc', fontSize: '0.96rem' }}>
+                          GovTech AI Advisor & Scheme Navigator
+                        </div>
+                        <div style={{ fontSize: '0.75rem', color: '#94a3b8' }}>
+                          Conversational guidance across official portals • Ask questions or launch autonomous form filling
+                        </div>
+                      </div>
+                    </div>
                     <button
                       type="button"
-                      className="gemini-btn gemini-btn-tonal"
-                      style={{ fontSize: '0.78rem', padding: '0.35rem 0.75rem' }}
-                      onClick={() => setShowSchemePicker(!showSchemePicker)}
+                      className="advisor-reset-btn"
+                      onClick={() => {
+                        setAdvisorChat([]);
+                        setSelectedService(null);
+                      }}
+                      title="Start fresh consultation"
                     >
-                      {showSchemePicker ? '▲ Hide Scheme Picker' : '▾ Choose Different Scheme'}
+                      ↺ New Search
                     </button>
                   </div>
 
-                  {showSchemePicker && (
-                    <div style={{ marginTop: '1rem', borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '0.75rem' }}>
-                      <div style={{ fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.5rem', fontWeight: 600 }}>
-                        SELECT FROM OFFICIAL SCHEMES CATALOG:
-                      </div>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-                        {KNOWN_SERVICES_CATALOG.map((sch) => (
-                          <button
-                            key={sch.service_id}
-                            type="button"
-                            className={`picker-option-card ${selectedService.service_id === sch.service_id ? 'selected' : ''}`}
-                            onClick={() => handleSelectSchemeManual(sch)}
-                            style={{ padding: '0.6rem 0.85rem' }}
-                          >
-                            <div className="picker-card-left">
-                              <span className={`custom-radio-circle ${selectedService.service_id === sch.service_id ? 'checked' : ''}`}>
-                                {selectedService.service_id === sch.service_id && <span className="custom-radio-dot" />}
-                              </span>
-                              <span className="picker-opt-label" style={{ fontSize: '0.82rem' }}>{sch.service_name}</span>
+                  {/* Chat Messages */}
+                  <div className="advisor-messages-list">
+                    {advisorChat.map((msg) => (
+                      <div key={msg.id} className={`chat-bubble-row ${msg.sender}`}>
+                        {msg.sender === 'assistant' && (
+                          <div className="assistant-avatar">✨</div>
+                        )}
+
+                        <div className={`chat-bubble ${msg.sender}`}>
+                          <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>
+                            {msg.text}
+                          </div>
+
+                          {/* Interactive Matched Scheme Card inside Assistant Message */}
+                          {msg.schemeMatch && msg.schemeMatch.message_type !== 'chat' && msg.schemeMatch.service_id !== 'general_chat' && (
+                            <div className="chat-scheme-card">
+                              <div className="chat-scheme-title-row">
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                                  <span style={{ fontSize: '1.2rem' }}>🏛️</span>
+                                  <div>
+                                    <div className="chat-scheme-name">{msg.schemeMatch.service_name}</div>
+                                    <div style={{ fontSize: '0.78rem', color: '#94a3b8' }}>
+                                      Official Portal: <strong style={{ color: '#e2e8f0' }}>{msg.schemeMatch.portal_name}</strong>
+                                      {msg.schemeMatch.portal_url && (
+                                        <a
+                                          href={msg.schemeMatch.portal_url.startsWith('http') ? msg.schemeMatch.portal_url : `https://${msg.schemeMatch.portal_url}`}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          style={{ color: '#38bdf8', textDecoration: 'none', marginLeft: '0.4rem' }}
+                                        >
+                                          {(() => {
+                                            try {
+                                              const u = msg.schemeMatch.portal_url.startsWith('http') ? msg.schemeMatch.portal_url : `https://${msg.schemeMatch.portal_url}`;
+                                              return `${new URL(u).hostname} ↗`;
+                                            } catch {
+                                              return `${msg.schemeMatch.portal_url} ↗`;
+                                            }
+                                          })()}
+                                        </a>
+                                      )}
+                                    </div>
+                                  </div>
+                                </div>
+                                <span className={`scheme-category-badge ${msg.schemeMatch.category}`}>
+                                  {msg.schemeMatch.category}
+                                </span>
+                              </div>
+
+                              {/* Why Portal Was Chosen */}
+                              {msg.schemeMatch.reason_chosen && (
+                                <div style={{ fontSize: '0.8rem', background: 'rgba(56, 189, 248, 0.06)', borderLeft: '3px solid #38bdf8', padding: '0.45rem 0.65rem', borderRadius: '4px', color: '#cbd5e1' }}>
+                                  <strong style={{ color: '#38bdf8' }}>💡 Why this portal: </strong>
+                                  {msg.schemeMatch.reason_chosen}
+                                </div>
+                              )}
+
+                              {/* Form Fields to Auto-Fill */}
+                              {msg.schemeMatch.fields_to_fill && msg.schemeMatch.fields_to_fill.length > 0 && (
+                                <div style={{ marginTop: '0.2rem' }}>
+                                  <div style={{ fontSize: '0.75rem', color: '#94a3b8', fontWeight: 600, marginBottom: '0.3rem' }}>
+                                    📋 AGENT WILL PRE-FILL THESE FIELDS:
+                                  </div>
+                                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.3rem' }}>
+                                    {msg.schemeMatch.fields_to_fill.map((f, fi) => (
+                                      <span key={fi} style={{ background: 'rgba(255, 255, 255, 0.05)', border: '1px solid rgba(255, 255, 255, 0.1)', padding: '0.15rem 0.5rem', borderRadius: '4px', fontSize: '0.72rem', color: '#e2e8f0' }}>
+                                        {f}
+                                      </span>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* Discovered Required Documents to Attach */}
+                              <div style={{ marginTop: '0.2rem' }}>
+                                <div style={{ fontSize: '0.75rem', color: '#94a3b8', fontWeight: 600, marginBottom: '0.3rem' }}>
+                                  📎 REQUIRED DOCUMENTS TO ATTACH:
+                                </div>
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem' }}>
+                                  {msg.schemeMatch.required_documents.map((doc, di) => (
+                                    <span key={di} className="scheme-doc-pill" style={{ fontSize: '0.75rem', padding: '0.2rem 0.55rem', background: 'rgba(56, 189, 248, 0.12)', borderColor: 'rgba(56, 189, 248, 0.3)', color: '#38bdf8' }}>
+                                      📎 {doc}
+                                    </span>
+                                  ))}
+                                </div>
+                              </div>
+
+                              {/* Limitations & Verification Disclosure */}
+                              {msg.schemeMatch.limitations && (
+                                <div style={{ fontSize: '0.76rem', color: '#f59e0b', background: 'rgba(245, 158, 11, 0.08)', border: '1px solid rgba(245, 158, 11, 0.25)', padding: '0.4rem 0.65rem', borderRadius: '6px' }}>
+                                  <span>⚠️ <strong>Portal Checkpoint:</strong> {msg.schemeMatch.limitations}</span>
+                                </div>
+                              )}
+
+                              {/* Action Buttons to Proceed or Change Scheme */}
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginTop: '0.4rem' }}>
+                                <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
+                                  <button
+                                    type="button"
+                                    className="chat-route-btn"
+                                    disabled={isNavigatingToDocs}
+                                    onClick={() => handleProceedToApplication(msg.schemeMatch)}
+                                    style={isNavigatingToDocs ? { opacity: 0.85, cursor: 'wait' } : {}}
+                                  >
+                                    {isNavigatingToDocs ? (
+                                      <>
+                                        <span style={{ display: 'inline-block', width: '12px', height: '12px', border: '2px solid rgba(255,255,255,0.3)', borderTopColor: '#fff', borderRadius: '50%', animation: 'spin 0.8s linear infinite', marginRight: '0.4rem' }} />
+                                        <span>Analyzing Portal...</span>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <span>🚀 {msg.schemeMatch.cta_message || 'Proceed to Document Hub'}</span>
+                                        <span>→</span>
+                                      </>
+                                    )}
+                                  </button>
+
+                                  <button
+                                    type="button"
+                                    className="gemini-btn gemini-btn-tonal"
+                                    disabled={isNavigatingToDocs}
+                                    style={{ fontSize: '0.78rem', padding: '0.4rem 0.8rem', borderRadius: '8px' }}
+                                    onClick={() => setShowSchemePicker(!showSchemePicker)}
+                                  >
+                                    {showSchemePicker ? '▲ Hide Catalog' : '▾ Choose Different Portal'}
+                                  </button>
+                                </div>
+
+                                {/* Persistent Real-time Navigation Progress */}
+                                {isNavigatingToDocs && (
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'rgba(56, 189, 248, 0.12)', border: '1px solid rgba(56, 189, 248, 0.3)', borderRadius: '8px', padding: '0.55rem 0.85rem', fontSize: '0.78rem', color: '#38bdf8', animation: 'fadeIn 0.2s ease-in' }}>
+                                    <span style={{ display: 'inline-block', width: '10px', height: '10px', borderRadius: '50%', background: '#38bdf8', boxShadow: '0 0 8px #38bdf8' }} />
+                                    <span>{navStepText || 'AI is preparing application pipeline...'}</span>
+                                  </div>
+                                )}
+                              </div>
+
+                              {showSchemePicker && (
+                                <div style={{ marginTop: '0.75rem', borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '0.6rem' }}>
+                                  <div style={{ fontSize: '0.74rem', color: '#94a3b8', marginBottom: '0.4rem', fontWeight: 600 }}>
+                                    SELECT FROM VERIFIED CATALOG:
+                                  </div>
+                                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                                    {KNOWN_SERVICES_CATALOG.map((sch) => (
+                                      <button
+                                        key={sch.service_id}
+                                        type="button"
+                                        className={`picker-option-card ${selectedService?.service_id === sch.service_id ? 'selected' : ''}`}
+                                        onClick={() => handleSelectSchemeManual(sch)}
+                                        style={{ padding: '0.45rem 0.75rem' }}
+                                      >
+                                        <span className="picker-opt-label" style={{ fontSize: '0.8rem' }}>{sch.service_name}</span>
+                                        <span className={`scheme-category-badge ${sch.category}`} style={{ fontSize: '0.6rem' }}>
+                                          {sch.category}
+                                        </span>
+                                      </button>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
                             </div>
-                            <span className={`scheme-category-badge ${sch.category}`} style={{ fontSize: '0.62rem' }}>
-                              {sch.category}
-                            </span>
-                          </button>
-                        ))}
+                          )}
+
+                          <div className="chat-timestamp">{msg.timestamp}</div>
+                        </div>
+
+                        {msg.sender === 'user' && (
+                          <div className="user-avatar">👤</div>
+                        )}
                       </div>
+                    ))}
+
+                    {/* AI Thinking Bubble */}
+                    {isClassifying && (
+                      <div className="chat-bubble-row assistant">
+                        <div className="assistant-avatar">✨</div>
+                        <div className="chat-bubble assistant" style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+                          <div className="hunting-spinner" style={{ width: '16px', height: '16px' }} />
+                          <span style={{ fontSize: '0.88rem', color: '#94a3b8' }}>
+                            AI Assistant is thinking...
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Pinned Search / Follow-Up Input Capsule */}
+                  <div className="gemini-search-capsule" style={{ width: '100%', maxWidth: '100%' }}>
+                    <div className="capsule-input-container">
+                      <input
+                        className="capsule-input"
+                        type="text"
+                        value={intent}
+                        placeholder="Ask a question (eligibility, documents, fee) or type 'route me' to apply..."
+                        onChange={(e) => setIntent(e.target.value)}
+                        onKeyDown={(e) => e.key === 'Enter' && handleIntentSubmit()}
+                      />
                     </div>
-                  )}
+
+                    <div className="capsule-actions">
+                      <button
+                        className={`capsule-icon-btn ${isListening ? 'recording' : ''}`}
+                        onClick={handleToggleVoice}
+                        title="Speak using Web Speech API"
+                      >
+                        <Icons.Mic />
+                      </button>
+
+                      <button
+                        className="capsule-submit-btn"
+                        disabled={!intent.trim()}
+                        onClick={() => handleIntentSubmit()}
+                        title="Send"
+                      >
+                        <Icons.ArrowUp />
+                      </button>
+                    </div>
+                  </div>
                 </div>
               )}
-            </div>
+            </>
           )}
 
           {/* ════════════════════════════════════════
@@ -1557,30 +1851,128 @@ const App: React.FC = () => {
           ════════════════════════════════════════ */}
           {currentStep === 2 && (
             <div className="gemini-card">
+              {/* Target Portal Identification Badge */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.6rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
+                <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', background: 'rgba(56, 189, 248, 0.1)', border: '1px solid rgba(56, 189, 248, 0.28)', borderRadius: '20px', padding: '0.35rem 0.85rem', fontSize: '0.82rem', color: '#38bdf8' }}>
+                  <span>🏛️ Target Portal:</span>
+                  <strong>{selectedService?.portal_name || 'National ServicePlus Portal'}</strong>
+                  {selectedService?.portal_url && (
+                    <a href={selectedService.portal_url} target="_blank" rel="noopener noreferrer" style={{ color: '#93c5fd', textDecoration: 'underline', marginLeft: '0.2rem' }}>
+                      {new URL(selectedService.portal_url).hostname} ↗
+                    </a>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  className="advisor-reset-btn"
+                  onClick={() => setCurrentStep(1)}
+                  style={{ fontSize: '0.78rem', padding: '0.25rem 0.65rem' }}
+                >
+                  ← Back to AI Advisor
+                </button>
+              </div>
+
               <h2 className="card-title">
                 {selectedService
-                  ? `Upload Document for ${selectedService.service_name}`
-                  : 'Upload Official Citizen Document'}
+                  ? `Document Hub — ${selectedService.service_name}`
+                  : 'Document Hub — Attach Official Citizen Document'}
               </h2>
               <p className="card-desc">
-                {selectedService
-                  ? `Target: ${selectedService.portal_name}. Required for this scheme: ${selectedService.required_documents.join(', ')}.`
-                  : 'Upload your Income Certificate, Marksheet, or ID card (PDF or Image). PyMuPDF & AI will extract structured identity fields for ServicePlus.'}
+                {selectedService?.reason_chosen
+                  ? selectedService.reason_chosen
+                  : 'Attach your required document below (PDF or Image). AI will extract verified identity data for form pre-filling.'}
               </p>
 
-              {/* Task 3: Dynamic Required Documents Pill Display */}
-              {dynamicBlueprint && dynamicBlueprint.required_documents_meta && dynamicBlueprint.required_documents_meta.length > 0 && (
-                <div style={{ marginBottom: '1.25rem', background: 'rgba(56, 189, 248, 0.08)', border: '1px solid rgba(56, 189, 248, 0.25)', borderRadius: '8px', padding: '0.85rem 1.15rem' }}>
-                  <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#38bdf8', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                    <span>⚡ OFFICIAL PORTAL DISCOVERED REQUIREMENTS:</span>
-                  </div>
-                  <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
-                    {dynamicBlueprint.required_documents_meta.map((doc, i) => (
-                      <span key={i} className="scheme-doc-pill" style={{ background: 'rgba(255,255,255,0.08)', padding: '0.35rem 0.75rem', borderRadius: '6px', fontSize: '0.78rem', border: '1px solid rgba(255,255,255,0.12)' }}>
-                        📎 {doc.original_label || doc.display_name} (Max {doc.max_size_kb} KB)
+              {/* Unified Required Documents Checklist with Smart Auto-Compressor */}
+              {((selectedService?.required_documents && selectedService.required_documents.length > 0) ||
+                (dynamicBlueprint?.required_documents_meta && dynamicBlueprint.required_documents_meta.length > 0)) && (
+                <div style={{ marginBottom: '1.25rem', background: 'rgba(255, 255, 255, 0.03)', border: '1px solid rgba(255, 255, 255, 0.08)', borderRadius: '12px', padding: '1rem 1.25rem' }}>
+                  <div style={{ fontSize: '0.8rem', fontWeight: 700, color: '#f8fafc', marginBottom: '0.65rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                      <span>📎</span>
+                      <span>REQUIRED DOCUMENTS FOR THIS APPLICATION:</span>
+                    </span>
+                    {dynamicBlueprint?.required_documents_meta && dynamicBlueprint.required_documents_meta.length > 0 && (
+                      <span style={{ fontSize: '0.68rem', color: '#38bdf8', background: 'rgba(56, 189, 248, 0.12)', border: '1px solid rgba(56, 189, 248, 0.25)', padding: '0.15rem 0.5rem', borderRadius: '4px' }}>
+                        ⚡ Live Portal DOM Verified
                       </span>
-                    ))}
+                    )}
                   </div>
+
+                  {/* Render Discovered Documents Cleanly */}
+                  <div style={{ display: 'flex', gap: '0.55rem', flexWrap: 'wrap' }}>
+                    {/* If dynamic DOM scanner found specific input slots, show them with clean size constraints */}
+                    {dynamicBlueprint?.required_documents_meta && dynamicBlueprint.required_documents_meta.length > 0 ? (
+                      dynamicBlueprint.required_documents_meta.map((doc, idx) => {
+                        const cleanLabel = (doc.original_label || doc.display_name)
+                          .replace(/\s*\([^)]*max[^)]*\)/gi, '')
+                          .replace(/\s*\([^)]*pdf[^)]*\)/gi, '')
+                          .trim();
+                        return (
+                          <span
+                            key={idx}
+                            className="scheme-doc-pill"
+                            style={{
+                              background: 'rgba(56, 189, 248, 0.12)',
+                              borderColor: 'rgba(56, 189, 248, 0.35)',
+                              color: '#38bdf8',
+                              padding: '0.35rem 0.75rem',
+                              borderRadius: '8px',
+                              fontSize: '0.8rem',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '0.4rem',
+                            }}
+                          >
+                            <span>✓</span>
+                            <span>{cleanLabel || doc.display_name}</span>
+                            {doc.max_size_kb && (
+                              <span style={{ fontSize: '0.7rem', opacity: 0.85, background: 'rgba(56, 189, 248, 0.2)', padding: '0.1rem 0.35rem', borderRadius: '4px' }}>
+                                Max {doc.max_size_kb} KB
+                              </span>
+                            )}
+                          </span>
+                        );
+                      })
+                    ) : (
+                      selectedService?.required_documents?.map((doc, idx) => (
+                        <span
+                          key={idx}
+                          className="scheme-doc-pill"
+                          style={{
+                            background: 'rgba(56, 189, 248, 0.12)',
+                            borderColor: 'rgba(56, 189, 248, 0.3)',
+                            color: '#38bdf8',
+                            padding: '0.35rem 0.75rem',
+                            borderRadius: '8px',
+                            fontSize: '0.8rem',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '0.4rem',
+                          }}
+                        >
+                          <span>✓</span>
+                          <span>{doc}</span>
+                        </span>
+                      ))
+                    )}
+                  </div>
+
+                  {/* Auto-Compression Assurance Callout */}
+                  <div style={{ marginTop: '0.85rem', background: 'rgba(16, 185, 129, 0.08)', border: '1px solid rgba(16, 185, 129, 0.25)', borderRadius: '8px', padding: '0.65rem 0.9rem', display: 'flex', alignItems: 'flex-start', gap: '0.6rem' }}>
+                    <span style={{ fontSize: '1.1rem', lineHeight: 1 }}>🛡️</span>
+                    <div style={{ fontSize: '0.76rem', color: '#a7f3d0', lineHeight: 1.5 }}>
+                      <strong style={{ color: '#34d399' }}>Smart Document Auto-Compressor Active:</strong> You don't need to worry about the file size of your documents. If your uploaded document exceeds portal limits (e.g. 200 KB), our built-in PyMuPDF optimization engine will automatically compress and format it to exact portal specifications with zero quality loss.
+                    </div>
+                  </div>
+
+                  {/* Limitations or Portal Note */}
+                  {selectedService?.limitations && (
+                    <div style={{ fontSize: '0.75rem', color: '#f59e0b', marginTop: '0.65rem', display: 'flex', alignItems: 'flex-start', gap: '0.4rem', background: 'rgba(245, 158, 11, 0.06)', border: '1px solid rgba(245, 158, 11, 0.2)', padding: '0.5rem 0.75rem', borderRadius: '6px' }}>
+                      <span style={{ lineHeight: 1.2 }}>⚠️</span>
+                      <span style={{ lineHeight: 1.4 }}><strong>Note:</strong> {selectedService.limitations}</span>
+                    </div>
+                  )}
                 </div>
               )}
 
