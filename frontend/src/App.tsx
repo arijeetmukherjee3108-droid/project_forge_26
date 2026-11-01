@@ -733,7 +733,8 @@ const App: React.FC = () => {
     try {
       // 2. Query AI GovTech Advisor for zero-shot intent reasoning & conversational guidance
       const match = await classifyIntent(query);
-      if (match.message_type !== 'chat') {
+      const isChatOnly = match.message_type === 'chat' || match.service_id === 'general_chat';
+      if (!isChatOnly) {
         setSelectedService(match);
         setProfile((prev) => ({
           ...prev,
@@ -754,8 +755,8 @@ const App: React.FC = () => {
         sender: 'assistant',
         text: adviceContent,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        schemeMatch: match.message_type !== 'chat' ? match : undefined,
-        canRoute: match.can_automate ?? true,
+        schemeMatch: !isChatOnly ? match : undefined,
+        canRoute: !isChatOnly && (match.can_automate ?? true),
       };
       setAdvisorChat((prev) => [...prev, assistantMsg]);
     } catch {
@@ -1593,7 +1594,7 @@ const App: React.FC = () => {
                           </div>
 
                           {/* Interactive Matched Scheme Card inside Assistant Message */}
-                          {msg.schemeMatch && (
+                          {msg.schemeMatch && msg.schemeMatch.message_type !== 'chat' && msg.schemeMatch.service_id !== 'general_chat' && (
                             <div className="chat-scheme-card">
                               <div className="chat-scheme-title-row">
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>

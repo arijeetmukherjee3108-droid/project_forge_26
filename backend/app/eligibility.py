@@ -709,7 +709,27 @@ def _llm_classify_intent(raw_query: str) -> "IntentClassifyResponse | None":
             "Applicant Name", "Father's Name", "Date of Birth", "Mobile Number", "Address", "State"
         ]
 
-        # 1. Known service from SERVICE_RULES
+        # 1. Chat-only / greeting response
+        if msg_type == "chat":
+            return IntentClassifyResponse(
+                matched_service_id="general_chat",
+                service_name="GovTech AI Assistant",
+                portal_name="National Citizen Portal",
+                portal_url="https://india.gov.in",
+                category="general",
+                confidence=conf,
+                explanation=expl,
+                suggested_documents=[],
+                ai_advice=advice or "Hello! How can I assist you with any government scheme or portal today?",
+                can_automate=False,
+                cta_message="Ask a Question",
+                message_type="chat",
+                reason_chosen=None,
+                limitations=None,
+                fields_to_fill=[],
+            )
+
+        # 2. Known service from SERVICE_RULES
         if raw_sid in _VALID_SERVICE_IDS:
             svc_cfg = SERVICE_RULES[raw_sid]
             return IntentClassifyResponse(
@@ -788,8 +808,29 @@ def classify_citizen_intent(text: str) -> IntentClassifyResponse:
 
     raw_lower = raw.lower()
 
+    # 0. Instant conversational greeting / general query fast-path (zero latency)
+    GREETING_REGEX = r'^(hi+|hello+|hey+|namaste|namaskar|good\s*(morning|afternoon|evening)|hola|sup|greetings)[\s!.]*$'
+    if re.match(GREETING_REGEX, raw_lower):
+        return IntentClassifyResponse(
+            matched_service_id="general_chat",
+            service_name="GovTech AI Assistant",
+            portal_name="National Citizen Portal",
+            portal_url="https://india.gov.in",
+            category="general",
+            confidence=1.0,
+            explanation="Citizen greeting",
+            suggested_documents=[],
+            ai_advice="Hello! I am your AI GovTech Assistant for Forge '26. You can ask me anything about government schemes, scholarships, farmer subsidies, or citizen certificates (e.g. JEE Main, PM-KISAN, Vidya Lakshmi, Income/Domicile certificates). When you're ready, I can also launch an autonomous browser agent to help fill forms on official portals. What would you like to explore today?",
+            can_automate=False,
+            cta_message="Ask a Question",
+            message_type="chat",
+            reason_chosen=None,
+            limitations=None,
+            fields_to_fill=[],
+        )
+
     # 1. Check keyword fast-path with word boundaries (unless citizen is asking "why" or "what is")
-    is_why_or_meta_query = bool(re.search(r'\b(why|kyun|kyu|reason|explain why|kaise|who are you|hello|hi|hey|thanks|thank you)\b', raw_lower))
+    is_why_or_meta_query = bool(re.search(r'\b(why|kyun|kyu|reason|explain why|kaise|who are you|hello+|hi+|hey+|thanks|thank you)\b', raw_lower))
 
     best_service_id = None
     best_score = 0

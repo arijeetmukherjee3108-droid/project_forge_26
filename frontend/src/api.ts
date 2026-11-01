@@ -170,20 +170,22 @@ export const classifyIntent = async (query: string): Promise<IntentClassificatio
       const match =
         KNOWN_SERVICES_CATALOG.find((k) => k.service_id.toLowerCase().replace(/[-_]/g, '') === sid);
 
+      const isChat = b.message_type === 'chat' || b.matched_service_id === 'general_chat';
+
       return {
         service_id: b.matched_service_id,
         service_name: b.service_name || match?.service_name || b.matched_service_id,
         portal_id: match?.portal_id || b.matched_service_id.toUpperCase(),
         portal_name: b.portal_name || match?.portal_name || b.service_name,
-        portal_url: b.portal_url || match?.portal_url || 'https://serviceonline.gov.in/citizenRegistration.html',
-        category: (b.category as any) || match?.category || 'welfare',
-        required_documents: b.suggested_documents?.length ? b.suggested_documents : (match?.required_documents || ['income_certificate', 'aadhaar']),
+        portal_url: b.portal_url || match?.portal_url || '',
+        category: (b.category as any) || match?.category || 'general',
+        required_documents: Array.isArray(b.suggested_documents) ? b.suggested_documents : (match?.required_documents || []),
         confidence: b.confidence ?? 0.95,
         description: b.explanation || match?.description || 'AI classified citizen intent.',
         ai_advice: b.ai_advice || b.explanation || match?.description,
-        can_automate: b.can_automate ?? true,
+        can_automate: b.can_automate ?? !isChat,
         cta_message: b.cta_message || `Apply for ${b.service_name || 'Scheme'}`,
-        message_type: b.message_type || 'scheme_info',
+        message_type: b.message_type || (isChat ? 'chat' : 'scheme_info'),
         reason_chosen: b.reason_chosen,
         limitations: b.limitations,
         fields_to_fill: b.fields_to_fill || [],
