@@ -267,6 +267,18 @@ class ExtractResponse(BaseModel):
         default=None,
         description="First ~500 chars of raw OCR/parsed text for debugging.",
     )
+    # ---- LLM provenance fields (set when LLM fallback ran) -----------------
+    extraction_source: str = Field(
+        default="regex",
+        description=(
+            "How the profile was extracted: 'regex', 'regex+llm_text', or "
+            "'regex+llm_vision'."
+        ),
+    )
+    llm_filled_fields: list[str] = Field(
+        default_factory=list,
+        description="Field names that were filled by the LLM fallback (empty when regex-only).",
+    )
 
 
 # ---------- b) POST /api/eligibility ----------------------------------------
