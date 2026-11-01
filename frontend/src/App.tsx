@@ -468,6 +468,8 @@ const App: React.FC = () => {
   const [selectedService, setSelectedService] = useState<IntentClassificationResponse | null>(null);
   const [isClassifying, setIsClassifying] = useState(false);
   const [showSchemePicker, setShowSchemePicker] = useState(false);
+  const [isNavigatingToDocs, setIsNavigatingToDocs] = useState(false);
+  const [navStepText, setNavStepText] = useState('');
 
   // Task 3: Zero-Shot Dynamic DOM Reasoner state
   const [dynamicBlueprint, setDynamicBlueprint] = useState<DynamicScanResponse | null>(null);
@@ -673,6 +675,9 @@ const App: React.FC = () => {
       return;
     }
 
+    setIsNavigatingToDocs(true);
+    setNavStepText(`Connecting to ${target.portal_name || 'official portal'}...`);
+
     setSelectedService(target);
     setProfile((prev) => ({
       ...prev,
@@ -695,14 +700,22 @@ const App: React.FC = () => {
       else setVaultQuery(target.required_documents[0]);
     }
 
-    const isKnownFastPath = target.service_id === '1784' || target.service_id === 'vidyalakshmi' || target.service_id === 'citizen_registration';
-    if (!isKnownFastPath && (target.portal_url || target.service_id)) {
-      showToast(`AI preparing form actions for ${target.service_name}...`, 'info');
-      await scanPortal(target.portal_url || target.service_id);
+    try {
+      const isKnownFastPath = target.service_id === '1784' || target.service_id === 'vidyalakshmi' || target.service_id === 'citizen_registration';
+      if (!isKnownFastPath && (target.portal_url || target.service_id)) {
+        setNavStepText(`AI Form Agent is scanning live portal DOM and discovering required fields & upload slots...`);
+        await scanPortal(target.portal_url || target.service_id);
+      }
+      setNavStepText(`Application pipeline prepared! Opening Document Hub...`);
+      await new Promise((r) => setTimeout(r, 600));
+      setCurrentStep(2);
+    } catch (err) {
+      console.warn('Navigation scan error:', err);
+      setCurrentStep(2);
+    } finally {
+      setIsNavigatingToDocs(false);
+      setNavStepText('');
     }
-
-    showToast(`Prepared application for: ${target.service_name}`, 'success');
-    setCurrentStep(2);
   };
 
   const handleIntentSubmit = async (textToUse?: string) => {
@@ -1666,25 +1679,47 @@ const App: React.FC = () => {
                                 </div>
                               )}
 
-                              {/* Prominent Action Button to Proceed to Application Pipeline */}
-                              <div style={{ display: 'flex', gap: '0.6rem', marginTop: '0.4rem', flexWrap: 'wrap' }}>
-                                <button
-                                  type="button"
-                                  className="chat-route-btn"
-                                  onClick={() => handleProceedToApplication(msg.schemeMatch)}
-                                >
-                                  <span>🚀 {msg.schemeMatch.cta_message || 'Proceed to Document Hub'}</span>
-                                  <span>→</span>
-                                </button>
+                              {/* Action Buttons to Proceed or Change Scheme */}
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginTop: '0.4rem' }}>
+                                <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
+                                  <button
+                                    type="button"
+                                    className="chat-route-btn"
+                                    disabled={isNavigatingToDocs}
+                                    onClick={() => handleProceedToApplication(msg.schemeMatch)}
+                                    style={isNavigatingToDocs ? { opacity: 0.85, cursor: 'wait' } : {}}
+                                  >
+                                    {isNavigatingToDocs ? (
+                                      <>
+                                        <span style={{ display: 'inline-block', width: '12px', height: '12px', border: '2px solid rgba(255,255,255,0.3)', borderTopColor: '#fff', borderRadius: '50%', animation: 'spin 0.8s linear infinite', marginRight: '0.4rem' }} />
+                                        <span>Analyzing Portal...</span>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <span>🚀 {msg.schemeMatch.cta_message || 'Proceed to Document Hub'}</span>
+                                        <span>→</span>
+                                      </>
+                                    )}
+                                  </button>
 
-                                <button
-                                  type="button"
-                                  className="gemini-btn gemini-btn-tonal"
-                                  style={{ fontSize: '0.78rem', padding: '0.4rem 0.8rem', borderRadius: '8px' }}
-                                  onClick={() => setShowSchemePicker(!showSchemePicker)}
-                                >
-                                  {showSchemePicker ? '▲ Hide Catalog' : '▾ Choose Different Portal'}
-                                </button>
+                                  <button
+                                    type="button"
+                                    className="gemini-btn gemini-btn-tonal"
+                                    disabled={isNavigatingToDocs}
+                                    style={{ fontSize: '0.78rem', padding: '0.4rem 0.8rem', borderRadius: '8px' }}
+                                    onClick={() => setShowSchemePicker(!showSchemePicker)}
+                                  >
+                                    {showSchemePicker ? '▲ Hide Catalog' : '▾ Choose Different Portal'}
+                                  </button>
+                                </div>
+
+                                {/* Persistent Real-time Navigation Progress */}
+                                {isNavigatingToDocs && (
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'rgba(56, 189, 248, 0.12)', border: '1px solid rgba(56, 189, 248, 0.3)', borderRadius: '8px', padding: '0.55rem 0.85rem', fontSize: '0.78rem', color: '#38bdf8', animation: 'fadeIn 0.2s ease-in' }}>
+                                    <span style={{ display: 'inline-block', width: '10px', height: '10px', borderRadius: '50%', background: '#38bdf8', boxShadow: '0 0 8px #38bdf8' }} />
+                                    <span>{navStepText || 'AI is preparing application pipeline...'}</span>
+                                  </div>
+                                )}
                               </div>
 
                               {showSchemePicker && (
@@ -1810,56 +1845,96 @@ const App: React.FC = () => {
                   : 'Attach your required document below (PDF or Image). AI will extract verified identity data for form pre-filling.'}
               </p>
 
-              {/* Required Documents Checklist Box */}
-              {selectedService?.required_documents && selectedService.required_documents.length > 0 && (
-                <div style={{ marginBottom: '1.25rem', background: 'rgba(255, 255, 255, 0.03)', border: '1px solid rgba(255, 255, 255, 0.08)', borderRadius: '10px', padding: '0.9rem 1.15rem' }}>
-                  <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#f8fafc', marginBottom: '0.55rem', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
-                    <span>📎 REQUIRED DOCUMENTS FOR THIS APPLICATION:</span>
-                  </div>
-                  <div style={{ display: 'flex', gap: '0.55rem', flexWrap: 'wrap' }}>
-                    {selectedService.required_documents.map((doc, idx) => (
-                      <span
-                        key={idx}
-                        className="scheme-doc-pill"
-                        style={{
-                          background: 'rgba(56, 189, 248, 0.12)',
-                          borderColor: 'rgba(56, 189, 248, 0.3)',
-                          color: '#38bdf8',
-                          padding: '0.35rem 0.75rem',
-                          borderRadius: '8px',
-                          fontSize: '0.8rem',
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: '0.4rem',
-                        }}
-                      >
-                        <span>✓</span>
-                        <span>{doc}</span>
+              {/* Unified Required Documents Checklist with Smart Auto-Compressor */}
+              {((selectedService?.required_documents && selectedService.required_documents.length > 0) ||
+                (dynamicBlueprint?.required_documents_meta && dynamicBlueprint.required_documents_meta.length > 0)) && (
+                <div style={{ marginBottom: '1.25rem', background: 'rgba(255, 255, 255, 0.03)', border: '1px solid rgba(255, 255, 255, 0.08)', borderRadius: '12px', padding: '1rem 1.25rem' }}>
+                  <div style={{ fontSize: '0.8rem', fontWeight: 700, color: '#f8fafc', marginBottom: '0.65rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                      <span>📎</span>
+                      <span>REQUIRED DOCUMENTS FOR THIS APPLICATION:</span>
+                    </span>
+                    {dynamicBlueprint?.required_documents_meta && dynamicBlueprint.required_documents_meta.length > 0 && (
+                      <span style={{ fontSize: '0.68rem', color: '#38bdf8', background: 'rgba(56, 189, 248, 0.12)', border: '1px solid rgba(56, 189, 248, 0.25)', padding: '0.15rem 0.5rem', borderRadius: '4px' }}>
+                        ⚡ Live Portal DOM Verified
                       </span>
-                    ))}
+                    )}
                   </div>
-                  {selectedService.limitations && (
-                    <div style={{ fontSize: '0.75rem', color: '#f59e0b', marginTop: '0.55rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                      <span>⚠️ Note:</span>
-                      <span>{selectedService.limitations}</span>
+
+                  {/* Render Discovered Documents Cleanly */}
+                  <div style={{ display: 'flex', gap: '0.55rem', flexWrap: 'wrap' }}>
+                    {/* If dynamic DOM scanner found specific input slots, show them with clean size constraints */}
+                    {dynamicBlueprint?.required_documents_meta && dynamicBlueprint.required_documents_meta.length > 0 ? (
+                      dynamicBlueprint.required_documents_meta.map((doc, idx) => {
+                        const cleanLabel = (doc.original_label || doc.display_name)
+                          .replace(/\s*\([^)]*max[^)]*\)/gi, '')
+                          .replace(/\s*\([^)]*pdf[^)]*\)/gi, '')
+                          .trim();
+                        return (
+                          <span
+                            key={idx}
+                            className="scheme-doc-pill"
+                            style={{
+                              background: 'rgba(56, 189, 248, 0.12)',
+                              borderColor: 'rgba(56, 189, 248, 0.35)',
+                              color: '#38bdf8',
+                              padding: '0.35rem 0.75rem',
+                              borderRadius: '8px',
+                              fontSize: '0.8rem',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '0.4rem',
+                            }}
+                          >
+                            <span>✓</span>
+                            <span>{cleanLabel || doc.display_name}</span>
+                            {doc.max_size_kb && (
+                              <span style={{ fontSize: '0.7rem', opacity: 0.85, background: 'rgba(56, 189, 248, 0.2)', padding: '0.1rem 0.35rem', borderRadius: '4px' }}>
+                                Max {doc.max_size_kb} KB
+                              </span>
+                            )}
+                          </span>
+                        );
+                      })
+                    ) : (
+                      selectedService?.required_documents?.map((doc, idx) => (
+                        <span
+                          key={idx}
+                          className="scheme-doc-pill"
+                          style={{
+                            background: 'rgba(56, 189, 248, 0.12)',
+                            borderColor: 'rgba(56, 189, 248, 0.3)',
+                            color: '#38bdf8',
+                            padding: '0.35rem 0.75rem',
+                            borderRadius: '8px',
+                            fontSize: '0.8rem',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '0.4rem',
+                          }}
+                        >
+                          <span>✓</span>
+                          <span>{doc}</span>
+                        </span>
+                      ))
+                    )}
+                  </div>
+
+                  {/* Auto-Compression Assurance Callout */}
+                  <div style={{ marginTop: '0.85rem', background: 'rgba(16, 185, 129, 0.08)', border: '1px solid rgba(16, 185, 129, 0.25)', borderRadius: '8px', padding: '0.65rem 0.9rem', display: 'flex', alignItems: 'flex-start', gap: '0.6rem' }}>
+                    <span style={{ fontSize: '1.1rem', lineHeight: 1 }}>🛡️</span>
+                    <div style={{ fontSize: '0.76rem', color: '#a7f3d0', lineHeight: 1.5 }}>
+                      <strong style={{ color: '#34d399' }}>Smart Document Auto-Compressor Active:</strong> You don't need to worry about the file size of your documents. If your uploaded document exceeds portal limits (e.g. 200 KB), our built-in PyMuPDF optimization engine will automatically compress and format it to exact portal specifications with zero quality loss.
+                    </div>
+                  </div>
+
+                  {/* Limitations or Portal Note */}
+                  {selectedService?.limitations && (
+                    <div style={{ fontSize: '0.75rem', color: '#f59e0b', marginTop: '0.65rem', display: 'flex', alignItems: 'flex-start', gap: '0.4rem', background: 'rgba(245, 158, 11, 0.06)', border: '1px solid rgba(245, 158, 11, 0.2)', padding: '0.5rem 0.75rem', borderRadius: '6px' }}>
+                      <span style={{ lineHeight: 1.2 }}>⚠️</span>
+                      <span style={{ lineHeight: 1.4 }}><strong>Note:</strong> {selectedService.limitations}</span>
                     </div>
                   )}
-                </div>
-              )}
-
-              {/* Task 3: Dynamic Required Documents Pill Display */}
-              {dynamicBlueprint && dynamicBlueprint.required_documents_meta && dynamicBlueprint.required_documents_meta.length > 0 && (
-                <div style={{ marginBottom: '1.25rem', background: 'rgba(56, 189, 248, 0.08)', border: '1px solid rgba(56, 189, 248, 0.25)', borderRadius: '8px', padding: '0.85rem 1.15rem' }}>
-                  <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#38bdf8', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                    <span>⚡ OFFICIAL PORTAL DISCOVERED REQUIREMENTS:</span>
-                  </div>
-                  <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
-                    {dynamicBlueprint.required_documents_meta.map((doc, i) => (
-                      <span key={i} className="scheme-doc-pill" style={{ background: 'rgba(255,255,255,0.08)', padding: '0.35rem 0.75rem', borderRadius: '6px', fontSize: '0.78rem', border: '1px solid rgba(255,255,255,0.12)' }}>
-                        📎 {doc.original_label || doc.display_name} (Max {doc.max_size_kb} KB)
-                      </span>
-                    ))}
-                  </div>
                 </div>
               )}
 
