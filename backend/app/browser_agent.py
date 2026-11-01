@@ -338,7 +338,11 @@ async def start_application(
             doc_path = str(candidate)
 
     # Determine headless mode.
-    headless = os.getenv("BROWSER_HEADLESS", "false").lower() in ("1", "true", "yes")
+    headless_env = os.getenv("BROWSER_HEADLESS")
+    if headless_env is not None:
+        headless = headless_env.lower() in ("1", "true", "yes")
+    else:
+        headless = True if (sys.platform != "win32" or not os.environ.get("DISPLAY")) else False
     pw = await async_playwright().start()
 
     try:
