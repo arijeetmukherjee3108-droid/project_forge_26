@@ -1324,9 +1324,14 @@ const App: React.FC = () => {
       /vidya|lakshmi/i.test(selectedService?.service_name || '') ||
       /vidyalakshmi/i.test(selectedService?.portal_url || '');
 
-    const portalName = selectedService?.portal_name || (isTargetVL ? 'Vidya Lakshmi Portal (Ministry of Education & NSDL)' : 'ServicePlus citizen registration portal');
-    const portalUrl = selectedService?.portal_url || (isTargetVL ? 'https://www.vidyalakshmi.co.in/Students/' : 'https://serviceonline.gov.in/citizenRegistration.html');
-    const isDynamicTarget = Boolean(dynamicBlueprint || (!isTargetVL && targetServiceId !== '1784' && targetServiceId !== 'citizen_registration'));
+    const isTargetSP =
+      targetServiceId === '1784' ||
+      targetServiceId === 'citizen_registration' ||
+      selectedService?.portal_id === 'SERVICE_PLUS_REGISTRATION';
+
+    const portalName = selectedService?.portal_name || (isTargetVL ? 'Vidya Lakshmi Portal (Ministry of Education & NSDL)' : isTargetSP ? 'ServicePlus citizen registration portal' : (dynamicBlueprint?.title || selectedService?.service_name || 'Official Government Portal'));
+    const portalUrl = selectedService?.portal_url || (isTargetVL ? 'https://www.vidyalakshmi.co.in/Students/' : isTargetSP ? 'https://serviceonline.gov.in/citizenRegistration.html' : (dynamicBlueprint?.portal_url || 'https://serviceonline.gov.in'));
+    const isDynamicTarget = !isTargetVL && !isTargetSP;
     const targetPortalId = isDynamicTarget
       ? (selectedService?.portal_url || selectedService?.service_id || 'dynamic_portal')
       : (selectedService?.portal_id || profile.target_portal_id || (isTargetVL ? 'VIDYA_LAKSHMI_PORTAL' : 'SERVICE_PLUS_REGISTRATION'));
@@ -2715,14 +2720,23 @@ const App: React.FC = () => {
               /vidya|lakshmi/i.test(selectedService?.service_name || '') ||
               /vidyalakshmi/i.test(selectedService?.portal_url || '');
 
+            const isServicePlus =
+              currentServiceId === '1784' ||
+              currentServiceId === 'citizen_registration' ||
+              selectedService?.portal_id === 'SERVICE_PLUS_REGISTRATION';
+
+            const isDynamicPortal = !isVidyaLakshmi && !isServicePlus;
+
             const currentPortalUrl =
               selectedService?.portal_url ||
+              dynamicBlueprint?.portal_url ||
               profile.target_portal_url ||
-              (isVidyaLakshmi ? 'https://www.vidyalakshmi.co.in/Students/' : 'https://serviceonline.gov.in/citizenRegistration.html');
+              (isVidyaLakshmi ? 'https://www.vidyalakshmi.co.in/Students/' : isServicePlus ? 'https://serviceonline.gov.in/citizenRegistration.html' : 'https://serviceonline.gov.in');
             const currentPortalName =
               selectedService?.portal_name ||
+              dynamicBlueprint?.title ||
               profile.target_portal_name ||
-              (isVidyaLakshmi ? 'Vidya Lakshmi Portal' : 'National ServicePlus Portal');
+              (isVidyaLakshmi ? 'Vidya Lakshmi Portal' : isServicePlus ? 'National ServicePlus Portal' : (selectedService?.service_name || 'Official Government Portal'));
 
             return (
               <div className="split-dashboard">
@@ -3283,7 +3297,7 @@ const App: React.FC = () => {
                         </div>
                       </div>
                     </div>
-                  ) : (
+                  ) : isServicePlus ? (
                     <div className="serviceplus-live-container">
                       {/* ServicePlus Top Header */}
                       <div className="serviceplus-masthead">
@@ -3566,6 +3580,303 @@ const App: React.FC = () => {
                             onClick={() => handleResume('SUBMIT')}
                           >
                             {loading ? 'Submitting to Official Portal…' : 'Submit Registration'}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    /* ═══════════════════════════════════════════════════════
+                       ZERO-SHOT DYNAMIC PORTAL LIVE INTERACTIVE FORM (Task 3)
+                       Live fields distilled by DOM Reasoner for target portal
+                       ═══════════════════════════════════════════════════════ */
+                    <div className="dynamic-portal-live-container">
+                      {/* Dynamic Portal Masthead */}
+                      <div className="dp-masthead">
+                        <div className="dp-branding-group">
+                          <div className="dp-emblem-badge" title="Official Government Emblem">🏛️</div>
+                          <div className="dp-logo-combo">
+                            <span className="dp-logo-title">
+                              {currentPortalName}
+                            </span>
+                            <span className="dp-logo-subtitle">
+                              {selectedService?.service_name || 'Official Scheme & Enterprise Registration Portal'}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="dp-top-nav">
+                          <span className="dp-badge-status">
+                            ● LIVE DISTILLED DOM
+                          </span>
+                          <span
+                            className="dp-nav-pill"
+                            onClick={() => showToast(`Connected to official portal: ${currentPortalUrl}`, 'info')}
+                            title="Official government portal host"
+                          >
+                            🌐 {(() => {
+                              try {
+                                return new URL(currentPortalUrl.startsWith('http') ? currentPortalUrl : 'https://serviceonline.gov.in').hostname;
+                              } catch {
+                                return 'gov.in';
+                              }
+                            })()}
+                          </span>
+                          <span
+                            className="dp-nav-pill"
+                            onClick={() => showToast('AI Form Agent synchronized with live input fields.', 'success')}
+                          >
+                            ⚡ Zero-Shot Synced
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Form Card */}
+                      <div className="dp-form-card">
+                        <div className="dp-card-header">
+                          <div className="dp-card-title">{dynamicBlueprint?.title || selectedService?.service_name || 'Scheme Application Form'}</div>
+                          <div className="dp-card-subtitle">
+                            Official government application form distilled live by autonomous agent from {currentPortalUrl}
+                          </div>
+                        </div>
+
+                        {/* Form Fields: Distilled from Live DOM or synthesized */}
+                        {dynamicBlueprint && dynamicBlueprint.fields && dynamicBlueprint.fields.length > 0 ? (
+                          <div>
+                            <div className="dp-form-grid">
+                              {dynamicBlueprint.fields
+                                .filter((f) => f.type !== 'checkbox' && !f.selector.toLowerCase().includes('captcha') && !f.label.toLowerCase().includes('captcha'))
+                                .map((field, idx) => {
+                                  const val = dynamicFormValues[field.selector] !== undefined
+                                    ? dynamicFormValues[field.selector]
+                                    : (field.label.toLowerCase().includes('father')
+                                        ? (profile.father_or_guardian_name || '')
+                                        : field.label.toLowerCase().includes('name')
+                                        ? (profile.full_name || '')
+                                        : field.label.toLowerCase().includes('mail')
+                                        ? (profile.email || '')
+                                        : field.label.toLowerCase().includes('mobile') || field.label.toLowerCase().includes('phone')
+                                        ? (profile.mobile_number || '')
+                                        : field.label.toLowerCase().includes('income')
+                                        ? (profile.annual_income || '')
+                                        : field.label.toLowerCase().includes('state')
+                                        ? (profile.state ? profile.state.toUpperCase() : '')
+                                        : '');
+
+                                  if (field.tag === 'select' || field.type === 'select') {
+                                    return (
+                                      <div key={field.selector || idx} className="dp-form-field">
+                                        <label className="dp-label">
+                                          {field.label || 'Select Option'} <span style={{ color: '#ea580c' }}>*</span>
+                                        </label>
+                                        <select
+                                          className="dp-select"
+                                          value={val}
+                                          onChange={(e) => setDynamicFormValues((prev) => ({ ...prev, [field.selector]: e.target.value }))}
+                                        >
+                                          <option value="">-- Select --</option>
+                                          {(field.options || ['RAJASTHAN', 'GUJARAT', 'BIHAR', 'MAHARASHTRA', 'UTTAR PRADESH']).map((opt) => (
+                                            <option key={opt} value={opt}>
+                                              {opt}
+                                            </option>
+                                          ))}
+                                        </select>
+                                      </div>
+                                    );
+                                  }
+
+                                  if (field.type === 'file') {
+                                    return (
+                                      <div key={field.selector || idx} className="dp-form-field full-width">
+                                        <label className="dp-label">
+                                          {field.label || 'Upload Document'} <span style={{ color: '#ea580c' }}>*</span>
+                                        </label>
+                                        <div className="dp-file-card">
+                                          <div className="dp-file-meta">
+                                            <span style={{ fontSize: '1.4rem' }}>📄</span>
+                                            <div>
+                                              <div className="dp-file-name">
+                                                {file ? file.name : (profile.source_documents?.[0]?.replace('saved:', '') || 'income_certificate_verified.pdf')}
+                                              </div>
+                                              <div className="dp-file-status">
+                                                ✓ {file ? `${Math.round(file.size / 1024)} KB` : 'Verified & Attached to Portal Field'}
+                                              </div>
+                                            </div>
+                                          </div>
+                                          <span className="dynamic-dom-badge" style={{ fontSize: '0.72rem' }}>Ready to Upload</span>
+                                        </div>
+                                      </div>
+                                    );
+                                  }
+
+                                  return (
+                                    <div key={field.selector || idx} className={`dp-form-field ${field.tag === 'textarea' ? 'full-width' : ''}`}>
+                                      <label className="dp-label">
+                                        {field.label || 'Field'} <span style={{ color: '#ea580c' }}>*</span>
+                                      </label>
+                                      <input
+                                        type={field.type || 'text'}
+                                        className="dp-input"
+                                        value={val}
+                                        onChange={(e) => setDynamicFormValues((prev) => ({ ...prev, [field.selector]: e.target.value }))}
+                                        placeholder={`Enter ${field.label || ''}`}
+                                      />
+                                    </div>
+                                  );
+                                })}
+                            </div>
+
+                            {/* Declaration Checkbox */}
+                            {dynamicBlueprint.fields.filter((f) => f.type === 'checkbox' || f.label.toLowerCase().includes('declare') || f.label.toLowerCase().includes('agree')).map((chk, idx) => (
+                              <label key={chk.selector || idx} className="dp-checkbox-wrap">
+                                <input
+                                  type="checkbox"
+                                  checked={termsAccepted}
+                                  onChange={(e) => setTermsAccepted(e.target.checked)}
+                                  style={{ marginTop: '0.2rem' }}
+                                />
+                                <span>{chk.label || 'I hereby declare that the details provided are accurate and true.'}</span>
+                              </label>
+                            ))}
+                          </div>
+                        ) : (
+                          /* Fallback tailored dynamic form if blueprint hasn't loaded */
+                          <div>
+                            <div className="dp-form-grid">
+                              <div className="dp-form-field">
+                                <label className="dp-label">Applicant Full Name <span style={{ color: '#ea580c' }}>*</span></label>
+                                <input
+                                  type="text"
+                                  className="dp-input"
+                                  value={profile.full_name || ''}
+                                  onChange={(e) => setProfile((p) => ({ ...p, full_name: e.target.value }))}
+                                  placeholder="Full Name"
+                                />
+                              </div>
+                              <div className="dp-form-field">
+                                <label className="dp-label">Father / Guardian Name <span style={{ color: '#ea580c' }}>*</span></label>
+                                <input
+                                  type="text"
+                                  className="dp-input"
+                                  value={profile.father_or_guardian_name || ''}
+                                  onChange={(e) => setProfile((p) => ({ ...p, father_or_guardian_name: e.target.value }))}
+                                  placeholder="Father's Name"
+                                />
+                              </div>
+                              <div className="dp-form-field">
+                                <label className="dp-label">Domicile State <span style={{ color: '#ea580c' }}>*</span></label>
+                                <select
+                                  className="dp-select"
+                                  value={profile.state ? profile.state.toUpperCase() : 'RAJASTHAN'}
+                                  onChange={(e) => setProfile((p) => ({ ...p, state: e.target.value }))}
+                                >
+                                  <option value="RAJASTHAN">RAJASTHAN</option>
+                                  <option value="BIHAR">BIHAR</option>
+                                  <option value="GUJARAT">GUJARAT</option>
+                                  <option value="MAHARASHTRA">MAHARASHTRA</option>
+                                  <option value="UTTAR PRADESH">UTTAR PRADESH</option>
+                                </select>
+                              </div>
+                              <div className="dp-form-field">
+                                <label className="dp-label">Mobile Number <span style={{ color: '#ea580c' }}>*</span></label>
+                                <input
+                                  type="tel"
+                                  className="dp-input"
+                                  value={profile.mobile_number || ''}
+                                  onChange={(e) => setProfile((p) => ({ ...p, mobile_number: e.target.value }))}
+                                  placeholder="10-digit mobile"
+                                />
+                              </div>
+                              <div className="dp-form-field full-width">
+                                <label className="dp-label">Upload Required Document <span style={{ color: '#ea580c' }}>*</span></label>
+                                <div className="dp-file-card">
+                                  <div className="dp-file-meta">
+                                    <span style={{ fontSize: '1.4rem' }}>📄</span>
+                                    <div>
+                                      <div className="dp-file-name">{file ? file.name : (profile.source_documents?.[0]?.replace('saved:', '') || 'income_certificate_verified.pdf')}</div>
+                                      <div className="dp-file-status">✓ Ready for submission (Verified)</div>
+                                    </div>
+                                  </div>
+                                  <span className="dynamic-dom-badge" style={{ fontSize: '0.72rem' }}>Attached</span>
+                                </div>
+                              </div>
+                            </div>
+
+                            <label className="dp-checkbox-wrap">
+                              <input
+                                type="checkbox"
+                                checked={termsAccepted}
+                                onChange={(e) => setTermsAccepted(e.target.checked)}
+                                style={{ marginTop: '0.2rem' }}
+                              />
+                              <span>I hereby declare that all details submitted for {selectedService?.service_name || 'this scheme'} are accurate.</span>
+                            </label>
+                          </div>
+                        )}
+
+                        {/* Security Verification (CAPTCHA) */}
+                        <div className="sp-captcha-container" style={{ marginTop: '1rem' }}>
+                          <label className="sp-label" style={{ marginBottom: '0.4rem', display: 'block' }}>
+                            Security Verification <span className="sp-req">*</span>
+                          </label>
+                          <div className="sp-captcha-flex-row">
+                            <div className="sp-captcha-visual">
+                              {captchaScreenshot ? (
+                                <img src={`data:image/png;base64,${captchaScreenshot}`} alt="Live Portal CAPTCHA" />
+                              ) : (
+                                <span className="sp-mock-captcha-text">{fallbackCaptcha}</span>
+                              )}
+                            </div>
+                            <button
+                              type="button"
+                              className="sp-captcha-btn"
+                              title="Refresh CAPTCHA"
+                              onClick={async () => {
+                                if (sessionId) {
+                                  showToast('Refetching fresh CAPTCHA from portal...', 'info');
+                                  await handleStartAgent();
+                                } else {
+                                  const newCode = refreshFallbackCaptcha();
+                                  showToast(`Refreshed CAPTCHA: ${newCode}`, 'info');
+                                }
+                              }}
+                            >
+                              🔄
+                            </button>
+                            <button
+                              type="button"
+                              className="sp-captcha-btn"
+                              title="Listen to CAPTCHA"
+                              onClick={() => {
+                                if ('speechSynthesis' in window) {
+                                  const textToRead = captchaText || fallbackCaptcha;
+                                  const utt = new SpeechSynthesisUtterance(textToRead.split('').join(' '));
+                                  utt.rate = 0.8;
+                                  window.speechSynthesis.speak(utt);
+                                  showToast('Playing audio CAPTCHA...', 'info');
+                                }
+                              }}
+                            >
+                              🔊
+                            </button>
+                            <input
+                              type="text"
+                              className="sp-input sp-captcha-text-input"
+                              placeholder="Enter Captcha"
+                              value={captchaText}
+                              onChange={(e) => setCaptchaText(e.target.value)}
+                            />
+                          </div>
+                        </div>
+
+                        {/* Submit Action Button */}
+                        <div style={{ marginTop: '1.25rem' }}>
+                          <button
+                            type="button"
+                            className="dp-btn-submit"
+                            disabled={!captchaText || loading || !termsAccepted}
+                            onClick={() => handleResume('SUBMIT')}
+                          >
+                            {loading ? 'Submitting to Portal…' : `Approve & Submit Registration for ${selectedService?.service_name || 'Scheme'}`}
                           </button>
                         </div>
                       </div>
