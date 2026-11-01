@@ -12,6 +12,7 @@ import {
   GoogleVaultFile,
   GoogleFetchRequest,
   IntentClassificationResponse,
+  DynamicScanResponse,
 } from './types';
 
 const BASE_URL = 'http://127.0.0.1:8000';
@@ -146,61 +147,38 @@ export const matchIntentFallback = (query: string): IntentClassificationResponse
  */
 export const classifyIntent = async (query: string): Promise<IntentClassificationResponse> => {
   try {
-    const resp = await axios.post<BackendIntentClassifyResponse>(
+    const resp = await axios.post<BackendIntentClassifyResponse & { portal_name?: string; portal_url?: string; category?: string }>(
       `${BASE_URL}/api/intent/classify`,
       { text: query, query },
-      { timeout: 3500 }
+      { timeout: 15000 }
     );
     if (resp.data && resp.data.matched_service_id) {
       const b = resp.data;
       const rawId = b.matched_service_id.toLowerCase();
       const sid = rawId.replace(/[-_]/g, '');
 
-      // Check known catalog for matching service
       const match =
-        KNOWN_SERVICES_CATALOG.find((k) => k.service_id.toLowerCase().replace(/[-_]/g, '') === sid) ||
-        KNOWN_SERVICES_CATALOG.find((k) => sid.includes(k.service_id.toLowerCase()) || k.service_id.toLowerCase().includes(sid));
-
-      if (match) {
-        return {
-          ...match,
-          service_name: b.service_name || match.service_name,
-          confidence: b.confidence ?? match.confidence,
-          description: b.explanation || match.description,
-          required_documents: b.suggested_documents?.length ? b.suggested_documents : match.required_documents,
-        };
-      }
-
-      // If backend introduced a new service_id
-      const isEdu = /vidya|scholarship|loan|student/i.test(rawId);
-      const isAgri = /kisan|farmer|krishi/i.test(rawId);
-      const isHealth = /ayushman|health|hospital/i.test(rawId);
-      const category = isEdu ? 'education' : isAgri ? 'agriculture' : isHealth ? 'health' : 'general';
+        KNOWN_SERVICES_CATALOG.find((k) => k.service_id.toLowerCase().replace(/[-_]/g, '') === sid);
 
       return {
         service_id: b.matched_service_id,
-        service_name: b.service_name,
-        portal_id: isEdu ? 'VIDYA_LAKSHMI_PORTAL' : isAgri ? 'PM_KISAN_PORTAL' : isHealth ? 'PM_JAY_PORTAL' : 'SERVICE_PLUS_REGISTRATION',
-        portal_name: isEdu ? 'Vidya Lakshmi Portal (Ministry of Education & NSDL)' : isAgri ? 'PM-KISAN Official Portal' : 'National ServicePlus Portal (NIC)',
-        portal_url: isEdu ? 'https://www.vidyalakshmi.co.in/Students/' : isAgri ? 'https://pmkisan.gov.in/' : 'https://serviceonline.gov.in/citizenRegistration.html',
-        category,
-        required_documents: b.suggested_documents?.length ? b.suggested_documents : ['Income Certificate', 'Aadhaar Card'],
+        service_name: b.service_name || match?.service_name || b.matched_service_id,
+        portal_id: match?.portal_id || b.matched_service_id.toUpperCase(),
+        portal_name: b.portal_name || match?.portal_name || b.service_name,
+        portal_url: b.portal_url || match?.portal_url || 'https://serviceonline.gov.in/citizenRegistration.html',
+        category: (b.category as any) || match?.category || 'welfare',
+        required_documents: b.suggested_documents?.length ? b.suggested_documents : (match?.required_documents || ['income_certificate', 'aadhaar']),
         confidence: b.confidence ?? 0.95,
-        description: b.explanation || 'Official government welfare scheme.',
+        description: b.explanation || match?.description || 'AI classified citizen intent.',
       };
     }
-  } catch {
-    // Backend offline: use intelligent fallback
+  } catch (err) {
+    console.warn('Backend intent classification error; using heuristic fallback', err);
   }
+
+  // Pure client-side fallback if backend is unreachable
   return matchIntentFallback(query);
 };
-
-// ── Document Extraction ───────────────────────────────────────────────────────
-
-/**
- * Upload a PDF/image and receive the extracted CitizenProfile.
- * POST /api/documents/extract
- */
 export const extractDocument = async (file: File): Promise<ExtractionResponse> => {
   const form = new FormData();
   form.append('file', file);
@@ -302,3 +280,19 @@ export const fetchGoogleVaultFile = async (
   );
   return resp.data;
 };
+
+/**
+ * Task 3: Zero-Shot Dynamic DOM Reasoner for Any Indian Portal
+ * POST /api/form/scan-dom → DynamicScanResponse { portal_url, title, fields, required_documents, action_plan }
+ */
+export const scanPortalDom = async (
+  portalUrl: string,
+  profile?: ApplicantProfile
+): Promise<DynamicScanResponse> => {
+  const resp = await axios.post<DynamicScanResponse>(`${BASE_URL}/api/form/scan-dom`, {
+    portal_url: portalUrl,
+    profile,
+  });
+  return resp.data;
+};
+

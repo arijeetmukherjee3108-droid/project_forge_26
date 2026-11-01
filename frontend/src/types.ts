@@ -171,3 +171,48 @@ export interface GoogleFetchRequest {
   source: string;
   demo_mode?: boolean;
 }
+
+
+// ── Task 3: Zero-Shot Dynamic DOM Reasoner Types ──────────────────────────────
+
+export interface DynamicFormField {
+  index: number;
+  selector: string;
+  tag: string;
+  type: string;
+  label: string;
+  accept?: string | null;
+  options?: string[] | null;
+  value?: any;
+}
+
+export interface DynamicActionPlanItem {
+  selector: string;
+  action: 'fill' | 'select' | 'upload' | 'check';
+  value?: any;
+  doc_type?: string;
+  drive_search_keyword?: string;
+  max_size_kb?: number;
+}
+
+export interface DynamicScanRequest {
+  portal_url: string;
+  profile?: ApplicantProfile;
+}
+
+export interface DynamicScanResponse {
+  portal_url: string;
+  title: string;
+  fields: DynamicFormField[];
+  required_documents: string[];
+  required_documents_meta: Array<{
+    selector: string;
+    doc_type: string;
+    display_name: string;
+    drive_search_keyword: string;
+    max_size_kb: number;
+    accept?: string | null;
+    original_label: string;
+  }>;
+  action_plan: DynamicActionPlanItem[];
+}

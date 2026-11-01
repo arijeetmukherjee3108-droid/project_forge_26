@@ -50,16 +50,20 @@ def _call_model(client: Any, model: str, system_prompt: str, user_content: str) 
     Make one Groq chat-completions call requesting JSON output.
     Returns the parsed dict, or raises on any error (caller handles).
     """
+    sys_prompt = system_prompt
+    if "json" not in sys_prompt.lower() and "json" not in user_content.lower():
+        sys_prompt += "\nYou must respond strictly with a valid JSON object."
+
     response = client.chat.completions.create(
         model=model,
         messages=[
-            {"role": "system", "content": system_prompt},
+            {"role": "system", "content": sys_prompt},
             {"role": "user", "content": user_content},
         ],
         response_format={"type": "json_object"},
         temperature=0.1,
-        timeout=15,
-        max_tokens=512,
+        timeout=25,
+        max_tokens=2048,
     )
     raw_text: str = response.choices[0].message.content or "{}"
     return json.loads(raw_text)
@@ -96,7 +100,7 @@ def _call_model_vision(
         response_format={"type": "json_object"},
         temperature=0.1,
         timeout=30,
-        max_tokens=512,
+        max_tokens=2048,
     )
     raw_text: str = response.choices[0].message.content or "{}"
     return json.loads(raw_text)

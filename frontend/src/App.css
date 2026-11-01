@@ -2877,3 +2877,121 @@ select.gemini-input option {
   display: inline-block;
   margin-bottom: 0.5rem;
 }
+
+
+/* ── Task 3: Zero-Shot Dynamic DOM Reasoner & Step 3 Switcher Styles ── */
+.dynamic-dom-banner {
+  background: linear-gradient(135deg, rgba(56, 189, 248, 0.12), rgba(168, 85, 247, 0.1));
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  border-radius: 8px;
+  padding: 1rem 1.25rem;
+  margin-bottom: 1.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.dynamic-dom-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.dynamic-dom-title {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #38bdf8;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.dynamic-dom-url {
+  font-size: 0.76rem;
+  color: #94a3b8;
+  font-family: monospace;
+}
+
+.dynamic-dom-badge {
+  background: rgba(16, 185, 129, 0.15);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  padding: 0.3rem 0.65rem;
+  border-radius: 20px;
+  font-size: 0.74rem;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.dynamic-dom-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1.25rem;
+  margin-bottom: 1.5rem;
+}
+
+.dynamic-field-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.dynamic-field-item.checkbox-type {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.75rem;
+  background: rgba(255, 255, 255, 0.03);
+  padding: 0.85rem 1rem;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.dynamic-field-label {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #e2e8f0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.dynamic-field-tag {
+  font-size: 0.68rem;
+  padding: 0.15rem 0.4rem;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #94a3b8;
+  font-family: monospace;
+}
+
+.vl-step3-container {
+  background: rgba(2, 132, 199, 0.05);
+  border: 1px solid rgba(2, 132, 199, 0.3);
+  border-radius: 8px;
+  padding: 1.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.vl-step3-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 1.25rem;
+  border-bottom: 1px solid rgba(2, 132, 199, 0.25);
+  padding-bottom: 0.75rem;
+}
+
+.vl-step3-title {
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: #38bdf8;
+}
+
+.vl-step3-sub {
+  font-size: 0.76rem;
+  color: #94a3b8;
+}

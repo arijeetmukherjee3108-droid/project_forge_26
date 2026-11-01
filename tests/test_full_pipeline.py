@@ -1,3 +1,9 @@
+import sys, os
+if sys.platform == 'win32':
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
 """
 Comprehensive End-to-End System Integration Test
 =================================================

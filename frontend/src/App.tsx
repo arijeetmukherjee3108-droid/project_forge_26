@@ -7,6 +7,8 @@ import {
   EligibilityResponse,
   GoogleVaultFile,
   IntentClassificationResponse,
+  DynamicScanResponse,
+  DynamicFormField,
 } from './types';
 import {
   extractDocument,
@@ -16,6 +18,7 @@ import {
   searchGoogleVault,
   fetchGoogleVaultFile,
   classifyIntent,
+  scanPortalDom,
   KNOWN_SERVICES_CATALOG,
 } from './api';
 
@@ -455,6 +458,35 @@ const App: React.FC = () => {
   const [isClassifying, setIsClassifying] = useState(false);
   const [showSchemePicker, setShowSchemePicker] = useState(false);
 
+  // Task 3: Zero-Shot Dynamic DOM Reasoner state
+  const [dynamicBlueprint, setDynamicBlueprint] = useState<DynamicScanResponse | null>(null);
+  const [isScanningDom, setIsScanningDom] = useState(false);
+  const [dynamicFormValues, setDynamicFormValues] = useState<Record<string, any>>({});
+
+  const scanPortal = async (url: string, currentProfile?: ApplicantProfile) => {
+    setIsScanningDom(true);
+    try {
+      const blueprint = await scanPortalDom(url, currentProfile || profile);
+      setDynamicBlueprint(blueprint);
+      const initialValues: Record<string, any> = {};
+      blueprint.action_plan.forEach((item) => {
+        if (item.value !== undefined && item.value !== null) {
+          initialValues[item.selector] = item.value;
+        }
+      });
+      setDynamicFormValues(initialValues);
+      if (blueprint.required_documents_meta && blueprint.required_documents_meta.length > 0) {
+        setVaultQuery(blueprint.required_documents_meta[0].drive_search_keyword || 'income');
+      }
+      return blueprint;
+    } catch (err: any) {
+      console.warn('DOM scanner error:', err);
+      return null;
+    } finally {
+      setIsScanningDom(false);
+    }
+  };
+
   // Filtered prompts for rotating capsule placeholder
   const activePrompts = useMemo(() => {
     const list = DOMAIN_SUGGESTIONS[activeMode] || [];
@@ -634,6 +666,7 @@ const App: React.FC = () => {
     }
     setIsClassifying(true);
     try {
+      // 1. Send query directly to Groq LLM for zero-shot intent reasoning
       const match = await classifyIntent(query);
       setSelectedService(match);
       setProfile((prev) => ({
@@ -646,8 +679,15 @@ const App: React.FC = () => {
         target_portal_url: match.portal_url,
         required_documents_list: match.required_documents,
       }));
+
+      // 2. If it's an unmapped portal form (not fast-path), scan the DOM live!
+      const isKnownFastPath = match.service_id === '1784' || match.service_id === 'vidyalakshmi' || match.service_id === 'citizen_registration';
+      if (!isKnownFastPath && (match.portal_url || match.service_id)) {
+        showToast(`AI analyzing live portal DOM for ${match.service_name}...`, 'info');
+        await scanPortal(match.portal_url || match.service_id);
+      }
+
       showToast(`AI routed to: ${match.service_name}`, 'success');
-      // Directly navigate citizen driven by AI intent processing
       setCurrentStep(2);
     } catch {
       showToast('Analyzing intent with fallback catalog.', 'info');
@@ -671,6 +711,10 @@ const App: React.FC = () => {
       target_portal_url: scheme.portal_url,
       required_documents_list: scheme.required_documents,
     }));
+    const isKnownFastPath = scheme.service_id === '1784' || scheme.service_id === 'vidyalakshmi' || scheme.service_id === 'citizen_registration';
+    if (!isKnownFastPath && (scheme.portal_url || scheme.service_id)) {
+      scanPortal(scheme.portal_url || scheme.service_id);
+    }
     showToast(`Switched scheme to ${scheme.service_name}`, 'info');
     setCurrentStep(2);
   };
@@ -1051,13 +1095,19 @@ const App: React.FC = () => {
       showToast('Please confirm verification of your data first.', 'error');
       return;
     }
-    if (!portalPassword) {
-      showToast('Please choose an account password in Step 3 before proceeding.', 'error');
-      return;
-    }
-    if (!isPasswordValid) {
-      showToast('Password must be 8+ chars with uppercase, lowercase, numeric, and special characters.', 'error');
-      return;
+    const currentSid = selectedService?.service_id || profile.target_service_id || '1784';
+    const isTargetVLQuick = currentSid === 'vidyalakshmi' || /vidya|lakshmi/i.test(currentSid);
+    const isDynamicPortalQuick = Boolean(dynamicBlueprint || (!isTargetVLQuick && currentSid !== '1784' && currentSid !== 'citizen_registration'));
+
+    if (!isTargetVLQuick && !isDynamicPortalQuick) {
+      if (!portalPassword) {
+        showToast('Please choose an account password in Step 3 before proceeding.', 'error');
+        return;
+      }
+      if (!isPasswordValid) {
+        showToast('Password must be 8+ chars with uppercase, lowercase, numeric, and special characters.', 'error');
+        return;
+      }
     }
     setCurrentStep(4);
     if (USE_MOCK) {
@@ -1078,7 +1128,10 @@ const App: React.FC = () => {
 
     const portalName = selectedService?.portal_name || (isTargetVL ? 'Vidya Lakshmi Portal (Ministry of Education & NSDL)' : 'ServicePlus citizen registration portal');
     const portalUrl = selectedService?.portal_url || (isTargetVL ? 'https://www.vidyalakshmi.co.in/Students/' : 'https://serviceonline.gov.in/citizenRegistration.html');
-    const targetPortalId = selectedService?.portal_id || profile.target_portal_id || (isTargetVL ? 'VIDYA_LAKSHMI_PORTAL' : 'SERVICE_PLUS_REGISTRATION');
+    const isDynamicTarget = Boolean(dynamicBlueprint || (!isTargetVL && targetServiceId !== '1784' && targetServiceId !== 'citizen_registration'));
+    const targetPortalId = isDynamicTarget
+      ? (selectedService?.portal_url || selectedService?.service_id || 'dynamic_portal')
+      : (selectedService?.portal_id || profile.target_portal_id || (isTargetVL ? 'VIDYA_LAKSHMI_PORTAL' : 'SERVICE_PLUS_REGISTRATION'));
 
     setAgentLog([
       '🚀 Initializing Playwright browser in visible Chromium mode...',
@@ -1515,6 +1568,22 @@ const App: React.FC = () => {
                   : 'Upload your Income Certificate, Marksheet, or ID card (PDF or Image). PyMuPDF & AI will extract structured identity fields for ServicePlus.'}
               </p>
 
+              {/* Task 3: Dynamic Required Documents Pill Display */}
+              {dynamicBlueprint && dynamicBlueprint.required_documents_meta && dynamicBlueprint.required_documents_meta.length > 0 && (
+                <div style={{ marginBottom: '1.25rem', background: 'rgba(56, 189, 248, 0.08)', border: '1px solid rgba(56, 189, 248, 0.25)', borderRadius: '8px', padding: '0.85rem 1.15rem' }}>
+                  <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#38bdf8', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                    <span>⚡ OFFICIAL PORTAL DISCOVERED REQUIREMENTS:</span>
+                  </div>
+                  <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
+                    {dynamicBlueprint.required_documents_meta.map((doc, i) => (
+                      <span key={i} className="scheme-doc-pill" style={{ background: 'rgba(255,255,255,0.08)', padding: '0.35rem 0.75rem', borderRadius: '6px', fontSize: '0.78rem', border: '1px solid rgba(255,255,255,0.12)' }}>
+                        📎 {doc.original_label || doc.display_name} (Max {doc.max_size_kb} KB)
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               <div
                 className={`gemini-dropzone ${dragOver ? 'drag-active' : ''}`}
                 onDrop={handleDrop}
@@ -1610,177 +1679,431 @@ const App: React.FC = () => {
           )}
 
           {/* ════════════════════════════════════════
-              STEP 3: VERIFICATION & ELIGIBILITY
+              STEP 3: VERIFICATION & MULTI-PORTAL SWITCHER
           ════════════════════════════════════════ */}
           {currentStep === 3 && (() => {
+            const currentServiceId = selectedService?.service_id || profile.target_service_id || '1784';
+            const isVidyaLakshmi =
+              currentServiceId === 'vidyalakshmi' ||
+              selectedService?.portal_id === 'VIDYA_LAKSHMI_PORTAL' ||
+              /vidya|lakshmi/i.test(currentServiceId) ||
+              /vidya|lakshmi/i.test(selectedService?.service_name || '') ||
+              /vidyalakshmi/i.test(selectedService?.portal_url || '');
+
+            const isDynamicPortal = Boolean(
+              dynamicBlueprint ||
+              (!isVidyaLakshmi && currentServiceId !== '1784' && currentServiceId !== 'citizen_registration')
+            );
+
+            // Validation logic based on active portal
             const isMobileValid = Boolean(profile.mobile_number && /^\d{10}$/.test(profile.mobile_number.trim()));
             const isEmailValid = Boolean(profile.email && /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(profile.email.trim()));
             const isPincodeValid = Boolean(profile.pincode && /^\d{6}$/.test(profile.pincode.trim()));
 
-            const missingFields = FORM_FIELDS.filter((f) => {
-              const val = (profile as any)[f.key];
-              if (val === undefined || val === null || String(val).trim() === '') return true;
-              if (f.key === 'mobile_number') return !isMobileValid;
-              if (f.key === 'email') return !isEmailValid;
-              if (f.key === 'pincode') return !isPincodeValid;
-              return false;
-            });
+            let isFormComplete = false;
+            let missingFields: FieldMeta[] = [];
 
-            const isFormComplete = missingFields.length === 0;
+            if (isVidyaLakshmi) {
+              // Vidya Lakshmi requires student fields
+              isFormComplete = Boolean(profile.full_name && isEmailValid && isMobileValid && profile.date_of_birth && profile.state);
+            } else if (isDynamicPortal) {
+              // Dynamic form fields validation
+              const dynamicFields = dynamicBlueprint?.fields || [];
+              const requiredCount = dynamicFields.filter(f => f.type !== 'file' && f.type !== 'checkbox').length;
+              const filledCount = dynamicFields.filter(f => {
+                const v = dynamicFormValues[f.selector];
+                return v !== undefined && v !== null && String(v).trim() !== '';
+              }).length;
+              isFormComplete = filledCount >= Math.min(requiredCount, 2);
+            } else {
+              // ServicePlus requires all standard registration fields
+              missingFields = FORM_FIELDS.filter((f) => {
+                const val = (profile as any)[f.key];
+                if (val === undefined || val === null || String(val).trim() === '') return true;
+                if (f.key === 'mobile_number') return !isMobileValid;
+                if (f.key === 'email') return !isEmailValid;
+                if (f.key === 'pincode') return !isPincodeValid;
+                return false;
+              });
+              isFormComplete = missingFields.length === 0;
+            }
 
             return (
               <div className="gemini-card">
-                <h2 className="card-title">Verify Extracted Citizen Data</h2>
+                <h2 className="card-title">
+                  {isVidyaLakshmi
+                    ? 'Verify Student Profile for Vidya Lakshmi'
+                    : isDynamicPortal
+                    ? `Verify Form Fields for ${dynamicBlueprint?.title || selectedService?.portal_name || 'Government Portal'}`
+                    : 'Verify Extracted Citizen Data for ServicePlus'}
+                </h2>
                 <p className="card-desc">
-                  Fields flagged with <span className="review-pill-inline">Review</span> require your confirmation. You can edit any value.
+                  {isVidyaLakshmi
+                    ? 'Vidya Lakshmi CELAF Student Registration: Confirm your personal contact and education loan details.'
+                    : isDynamicPortal
+                    ? 'Zero-Shot AI Dynamic Reasoner: Fields distilled in real-time from the live government portal.'
+                    : 'Fields flagged with Review require your confirmation. You can edit any value.'}
                 </p>
 
-                <div className="gemini-form-grid">
-                  {FORM_FIELDS.map((f) => {
-                    const uncertain = uncertainFields.includes(f.key as string);
-                    const val = (profile as any)[f.key];
-                    const strVal = val !== undefined && val !== null ? String(val) : '';
-
-                    let validationMsg = null;
-                    if (f.key === 'mobile_number') {
-                      if (strVal.length > 0 && strVal.length < 10) {
-                        validationMsg = <div className="field-validation-msg error">⚠️ {10 - strVal.length} more digits needed (10-digit mobile)</div>;
-                      } else if (strVal.length === 10) {
-                        validationMsg = <div className="field-validation-msg success">✓ Valid 10-digit mobile number</div>;
-                      }
-                    } else if (f.key === 'email') {
-                      const isValidEmail = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(strVal.trim());
-                      if (strVal.length > 0 && !isValidEmail) {
-                        validationMsg = <div className="field-validation-msg error">⚠️ Must be valid email (e.g. name@gmail.com, name@yahoo.com)</div>;
-                      } else if (isValidEmail) {
-                        validationMsg = <div className="field-validation-msg success">✓ Valid email format</div>;
-                      }
-                    } else if (f.key === 'pincode') {
-                      if (strVal.length > 0 && strVal.length < 6) {
-                        validationMsg = <div className="field-validation-msg error">⚠️ {6 - strVal.length} more digits needed (6-digit PIN)</div>;
-                      } else if (strVal.length === 6) {
-                        validationMsg = <div className="field-validation-msg success">✓ Valid 6-digit PIN code</div>;
-                      }
-                    }
-
-                    return (
-                      <div key={f.key as string} className={`form-item ${f.spanTwo ? 'span-two' : ''}`}>
-                        <label className="item-label">
-                          <span>{f.label}</span>
-                          {uncertain && <span className="uncertain-tag">Review</span>}
-                        </label>
-                        {f.type === 'select' && f.options ? (
-                          <select
-                            className={`gemini-input ${uncertain ? 'uncertain-highlight' : ''}`}
-                            name={f.key as string}
-                            value={strVal}
-                            onChange={handleInputChange}
-                          >
-                            <option value="">Select {f.label}...</option>
-                            {f.options.map((opt) => (
-                              <option key={opt} value={opt}>
-                                {opt.toUpperCase()}
-                              </option>
-                            ))}
-                          </select>
-                        ) : (
-                          <input
-                            className={`gemini-input ${uncertain ? 'uncertain-highlight' : ''}`}
-                            type={f.type || 'text'}
-                            name={f.key as string}
-                            placeholder={f.placeholder}
-                            value={f.type === 'date' ? toIsoDate(profile.date_of_birth) : strVal}
-                            onChange={handleInputChange}
-                            max={f.type === 'date' ? new Date().toISOString().split('T')[0] : undefined}
-                          />
-                        )}
-                        {validationMsg}
+                {/* ─── CASE 1: VIDYA LAKSHMI STUDENT LAYOUT (Bug 3 & 5) ─── */}
+                {isVidyaLakshmi ? (
+                  <div className="vl-step3-container">
+                    <div className="vl-step3-header">
+                      <span style={{ fontSize: '2.2rem' }}>🎓</span>
+                      <div>
+                        <div className="vl-step3-title">विद्या लक्ष्मी • Vidya Lakshmi — Student Registration Form</div>
+                        <div className="vl-step3-sub">Ministry of Education & NSDL e-Gov • CELAF Student & Loan Portal</div>
                       </div>
-                    );
-                  })}
-                </div>
-
-                {/* Bug 7: Citizen Desired Account Password Choice */}
-                <div className="account-password-section">
-                  <div className="account-password-header">
-                    <div className="account-password-title">
-                      <span>🔐</span>
-                      <span>Desired Portal Account Password</span>
                     </div>
-                    <button
-                      type="button"
-                      className="generate-password-btn"
-                      onClick={() => {
-                        const strong = generateStrongPassword();
-                        setPortalPassword(strong);
-                        showToast('Generated secure password matching official portal rules!', 'info');
-                      }}
-                      title="Generate a secure password meeting all ServicePlus requirements"
-                    >
-                      🎲 Suggest Secure Password
-                    </button>
-                  </div>
-                  <p className="account-password-desc">
-                    Choose the account password for your official portal registration. The AI agent will submit this password to register your citizen profile.
-                  </p>
 
-                  <div className="sp-password-wrap" style={{ maxWidth: '420px' }}>
-                    <input
-                      type={showPassword ? 'text' : 'password'}
-                      className="gemini-input sp-password-input"
-                      value={portalPassword}
-                      onChange={(e) => setPortalPassword(e.target.value)}
-                      placeholder="Choose account password (e.g. Citizen@2026)"
-                    />
-                    <button
-                      type="button"
-                      className="sp-password-toggle-btn"
-                      onClick={() => setShowPassword(!showPassword)}
-                      title={showPassword ? 'Hide password' : 'Show password'}
-                    >
-                      {showPassword ? '👁️' : '🔒'}
-                    </button>
-                  </div>
+                    <div className="gemini-form-grid">
+                      <div className="form-item">
+                        <label className="item-label">
+                          <span>Student Full Name (छात्र का नाम)</span>
+                          {uncertainFields.includes('full_name') && <span className="uncertain-tag">Review</span>}
+                        </label>
+                        <input
+                          className="gemini-input"
+                          type="text"
+                          name="full_name"
+                          value={profile.full_name || ''}
+                          onChange={handleInputChange}
+                          placeholder="Student Name as on Class 10/12 Marksheet"
+                        />
+                      </div>
 
-                  {/* Real-time Rule Indicators */}
-                  <div className="password-rules-checklist">
-                    <span className={`rule-chip ${portalPassword.length >= 8 ? 'valid' : ''}`}>
-                      {portalPassword.length >= 8 ? '✓' : '•'} 8+ Characters
-                    </span>
-                    <span className={`rule-chip ${/[A-Z]/.test(portalPassword) ? 'valid' : ''}`}>
-                      {/[A-Z]/.test(portalPassword) ? '✓' : '•'} 1 Uppercase Letter
-                    </span>
-                    <span className={`rule-chip ${/[a-z]/.test(portalPassword) ? 'valid' : ''}`}>
-                      {/[a-z]/.test(portalPassword) ? '✓' : '•'} 1 Lowercase Letter
-                    </span>
-                    <span className={`rule-chip ${/\d/.test(portalPassword) ? 'valid' : ''}`}>
-                      {/\d/.test(portalPassword) ? '✓' : '•'} 1 Number
-                    </span>
-                    <span className={`rule-chip ${/[!@#$%^&*]/.test(portalPassword) ? 'valid' : ''}`}>
-                      {/[!@#$%^&*]/.test(portalPassword) ? '✓' : '•'} 1 Special (!@#$%^&*)
-                    </span>
-                  </div>
-                </div>
+                      <div className="form-item">
+                        <label className="item-label">
+                          <span>Email ID (ईमेल आईडी)</span>
+                          {uncertainFields.includes('email') && <span className="uncertain-tag">Review</span>}
+                        </label>
+                        <input
+                          className="gemini-input"
+                          type="email"
+                          name="email"
+                          value={profile.email || ''}
+                          onChange={handleInputChange}
+                          placeholder="student.name@example.com"
+                        />
+                        {profile.email && !isEmailValid && (
+                          <div className="field-validation-msg error">⚠️ Must be valid email address</div>
+                        )}
+                      </div>
 
-                {!isPasswordValid && portalPassword.length > 0 && (
-                  <div className="field-validation-msg error" style={{ marginTop: '0.5rem' }}>
-                    ⚠️ Password does not meet all portal criteria yet. Click &quot;Suggest Secure Password&quot; if you need a quick compliant option.
-                  </div>
-                )}
+                      <div className="form-item">
+                        <label className="item-label">
+                          <span>Mobile Number (मोबाइल नंबर)</span>
+                          {uncertainFields.includes('mobile_number') && <span className="uncertain-tag">Review</span>}
+                        </label>
+                        <input
+                          className="gemini-input"
+                          type="tel"
+                          name="mobile_number"
+                          value={profile.mobile_number || ''}
+                          onChange={handleInputChange}
+                          placeholder="10-digit mobile number"
+                        />
+                        {profile.mobile_number && !isMobileValid && (
+                          <div className="field-validation-msg error">⚠️ Must be 10 digits</div>
+                        )}
+                      </div>
 
-                {!isFormComplete && (
-                  <div className="incomplete-fields-callout">
-                    <div className="incomplete-title">
-                      <span>⚠️ Complete all required fields to check eligibility ({missingFields.length} remaining):</span>
+                      <div className="form-item">
+                        <label className="item-label">
+                          <span>Date of Birth (जन्म तिथि)</span>
+                          {uncertainFields.includes('date_of_birth') && <span className="uncertain-tag">Review</span>}
+                        </label>
+                        <input
+                          className="gemini-input"
+                          type="date"
+                          name="date_of_birth"
+                          value={toIsoDate(profile.date_of_birth)}
+                          onChange={handleInputChange}
+                        />
+                      </div>
+
+                      <div className="form-item span-two">
+                        <label className="item-label">
+                          <span>State of Domicile (मूल निवास राज्य)</span>
+                          {uncertainFields.includes('state') && <span className="uncertain-tag">Review</span>}
+                        </label>
+                        <input
+                          className="gemini-input"
+                          type="text"
+                          name="state"
+                          value={profile.state || ''}
+                          onChange={handleInputChange}
+                          placeholder="e.g. Rajasthan, Uttar Pradesh, Maharashtra"
+                        />
+                      </div>
                     </div>
-                    <div className="missing-pills-row">
-                      {missingFields.map((f) => (
-                        <span key={f.key as string} className="missing-field-pill">
-                          {f.label.split(' (')[0]}
+                  </div>
+                ) : isDynamicPortal ? (
+                  /* ─── CASE 2: ZERO-SHOT DYNAMIC DOM REASONER (Task 3) ─── */
+                  <div>
+                    <div className="dynamic-dom-banner">
+                      <div className="dynamic-dom-info">
+                        <div className="dynamic-dom-title">
+                          <span>⚡ Zero-Shot Dynamic DOM Reasoner</span>
+                          <span className="dynamic-dom-badge">✓ Live Form Blueprint (~400 tokens)</span>
+                        </div>
+                        <div className="dynamic-dom-url">
+                          🏛️ Scanned Portal: {dynamicBlueprint?.title || selectedService?.portal_name || 'Government Portal'} • {dynamicBlueprint?.portal_url || selectedService?.portal_url || ''}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        className="gemini-btn gemini-btn-tonal"
+                        style={{ fontSize: '0.76rem', padding: '0.35rem 0.75rem' }}
+                        onClick={() => scanPortal(selectedService?.portal_url || selectedService?.service_id || '')}
+                        disabled={isScanningDom}
+                      >
+                        {isScanningDom ? 'Rescanning live DOM…' : '🔄 Rescan Portal DOM'}
+                      </button>
+                    </div>
+
+                    {isScanningDom ? (
+                      <div style={{ textAlign: 'center', padding: '2.5rem 1rem', background: 'rgba(255,255,255,0.02)', borderRadius: '8px', border: '1px dashed rgba(56, 189, 248, 0.3)', marginBottom: '1.5rem' }}>
+                        <div className="hunting-spinner" style={{ margin: '0 auto 1rem', width: '28px', height: '28px' }} />
+                        <div style={{ color: '#38bdf8', fontWeight: 600, fontSize: '0.95rem', marginBottom: '0.35rem' }}>
+                          Playwright In-Browser DOM Reader Distilling Live Webpage...
+                        </div>
+                        <div style={{ color: '#94a3b8', fontSize: '0.8rem' }}>
+                          Extracting form fields, selects, and file requirements into compact ~400-token JSON blueprint for LLM.
+                        </div>
+                      </div>
+                    ) : (
+                    <div className="dynamic-dom-grid">
+                      {(dynamicBlueprint?.fields || []).map((field, idx) => {
+                        const sel = field.selector;
+                        const currentVal = dynamicFormValues[sel] !== undefined
+                          ? dynamicFormValues[sel]
+                          : (field.type === 'checkbox' ? false : (field.value || ''));
+
+                        if (field.type === 'checkbox') {
+                          return (
+                            <div key={idx} className="dynamic-field-item checkbox-type span-two">
+                              <input
+                                type="checkbox"
+                                id={`dynamic-${idx}`}
+                                checked={Boolean(currentVal)}
+                                onChange={(e) => setDynamicFormValues(prev => ({ ...prev, [sel]: e.target.checked }))}
+                              />
+                              <label htmlFor={`dynamic-${idx}`} style={{ cursor: 'pointer', fontSize: '0.88rem', color: '#e2e8f0', margin: 0 }}>
+                                {field.label || 'I hereby declare that details are accurate.'}
+                              </label>
+                              <span className="dynamic-field-tag">{sel}</span>
+                            </div>
+                          );
+                        }
+
+                        if (field.tag === 'select' || (field.options && field.options.length > 0)) {
+                          return (
+                            <div key={idx} className="dynamic-field-item">
+                              <label className="dynamic-field-label">
+                                <span>{field.label}</span>
+                                <span className="dynamic-field-tag">{sel}</span>
+                              </label>
+                              <select
+                                className="gemini-input"
+                                value={String(currentVal || 'RAJASTHAN')}
+                                onChange={(e) => setDynamicFormValues(prev => ({ ...prev, [sel]: e.target.value }))}
+                              >
+                                <option value="">-- Select Option --</option>
+                                {(field.options || ['BIHAR', 'GUJARAT', 'RAJASTHAN']).map((opt) => (
+                                  <option key={opt} value={opt}>{opt}</option>
+                                ))}
+                              </select>
+                            </div>
+                          );
+                        }
+
+                        if (field.type === 'file') {
+                          return (
+                            <div key={idx} className="dynamic-field-item span-two">
+                              <label className="dynamic-field-label">
+                                <span>📎 {field.label}</span>
+                                <span className="dynamic-field-tag">{sel}</span>
+                              </label>
+                              <div style={{ background: 'rgba(255,255,255,0.04)', padding: '0.75rem 1rem', borderRadius: '6px', fontSize: '0.82rem', color: '#94a3b8', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                <span>{file ? `✅ Ready for autonomous upload: ${file.name} (${(file.size/1024).toFixed(0)} KB)` : '📎 Document selected in Step 2'}</span>
+                                <button type="button" className="gemini-btn gemini-btn-tonal" style={{ fontSize: '0.74rem', padding: '0.2rem 0.6rem' }} onClick={() => setCurrentStep(2)}>
+                                  {file ? 'Change File' : 'Select File'}
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        }
+
+                        return (
+                          <div key={idx} className="dynamic-field-item">
+                            <label className="dynamic-field-label">
+                              <span>{field.label}</span>
+                              <span className="dynamic-field-tag">{sel}</span>
+                            </label>
+                            <input
+                              className="gemini-input"
+                              type={field.type || 'text'}
+                              value={String(currentVal || '')}
+                              placeholder={field.label}
+                              onChange={(e) => setDynamicFormValues(prev => ({ ...prev, [sel]: e.target.value }))}
+                            />
+                          </div>
+                        );
+                      })}
+                    </div>
+                    )}
+                  </div>
+                ) : (
+                  /* ─── CASE 3: STANDARD SERVICEPLUS REGISTRATION LAYOUT ─── */
+                  <>
+                    <div className="gemini-form-grid">
+                      {FORM_FIELDS.map((f) => {
+                        const uncertain = uncertainFields.includes(f.key as string);
+                        const val = (profile as any)[f.key];
+                        const strVal = val !== undefined && val !== null ? String(val) : '';
+
+                        let validationMsg = null;
+                        if (f.key === 'mobile_number') {
+                          if (strVal.length > 0 && strVal.length < 10) {
+                            validationMsg = <div className="field-validation-msg error">⚠️ {10 - strVal.length} more digits needed (10-digit mobile)</div>;
+                          } else if (strVal.length === 10) {
+                            validationMsg = <div className="field-validation-msg success">✓ Valid 10-digit mobile number</div>;
+                          }
+                        } else if (f.key === 'email') {
+                          const isValidEmail = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(strVal.trim());
+                          if (strVal.length > 0 && !isValidEmail) {
+                            validationMsg = <div className="field-validation-msg error">⚠️ Must be valid email (e.g. name@gmail.com)</div>;
+                          } else if (isValidEmail) {
+                            validationMsg = <div className="field-validation-msg success">✓ Valid email format</div>;
+                          }
+                        } else if (f.key === 'pincode') {
+                          if (strVal.length > 0 && strVal.length < 6) {
+                            validationMsg = <div className="field-validation-msg error">⚠️ {6 - strVal.length} more digits needed (6-digit PIN)</div>;
+                          } else if (strVal.length === 6) {
+                            validationMsg = <div className="field-validation-msg success">✓ Valid 6-digit PIN code</div>;
+                          }
+                        }
+
+                        return (
+                          <div key={f.key as string} className={`form-item ${f.spanTwo ? 'span-two' : ''}`}>
+                            <label className="item-label">
+                              <span>{f.label}</span>
+                              {uncertain && <span className="uncertain-tag">Review</span>}
+                            </label>
+                            {f.type === 'select' && f.options ? (
+                              <select
+                                className={`gemini-input ${uncertain ? 'uncertain-highlight' : ''}`}
+                                name={f.key as string}
+                                value={strVal}
+                                onChange={handleInputChange}
+                              >
+                                <option value="">Select {f.label}...</option>
+                                {f.options.map((opt) => (
+                                  <option key={opt} value={opt}>
+                                    {opt.toUpperCase()}
+                                  </option>
+                                ))}
+                              </select>
+                            ) : (
+                              <input
+                                className={`gemini-input ${uncertain ? 'uncertain-highlight' : ''}`}
+                                type={f.type || 'text'}
+                                name={f.key as string}
+                                placeholder={f.placeholder}
+                                value={f.type === 'date' ? toIsoDate(profile.date_of_birth) : strVal}
+                                onChange={handleInputChange}
+                                max={f.type === 'date' ? new Date().toISOString().split('T')[0] : undefined}
+                              />
+                            )}
+                            {validationMsg}
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {/* Bug 7: Citizen Desired Account Password Choice */}
+                    <div className="account-password-section">
+                      <div className="account-password-header">
+                        <div className="account-password-title">
+                          <span>🔐</span>
+                          <span>Desired Portal Account Password</span>
+                        </div>
+                        <button
+                          type="button"
+                          className="generate-password-btn"
+                          onClick={() => {
+                            const strong = generateStrongPassword();
+                            setPortalPassword(strong);
+                            showToast('Generated secure password matching official portal rules!', 'info');
+                          }}
+                          title="Generate a secure password meeting all ServicePlus requirements"
+                        >
+                          🎲 Suggest Secure Password
+                        </button>
+                      </div>
+                      <p className="account-password-desc">
+                        Choose the account password for your official portal registration. The AI agent will submit this password to register your citizen profile.
+                      </p>
+
+                      <div className="sp-password-wrap" style={{ maxWidth: '420px' }}>
+                        <input
+                          type={showPassword ? 'text' : 'password'}
+                          className="gemini-input sp-password-input"
+                          value={portalPassword}
+                          onChange={(e) => setPortalPassword(e.target.value)}
+                          placeholder="Choose account password (e.g. Citizen@2026)"
+                        />
+                        <button
+                          type="button"
+                          className="sp-password-toggle-btn"
+                          onClick={() => setShowPassword(!showPassword)}
+                          title={showPassword ? 'Hide password' : 'Show password'}
+                        >
+                          {showPassword ? '👁️' : '🔒'}
+                        </button>
+                      </div>
+
+                      <div className="password-rules-checklist">
+                        <span className={`rule-chip ${portalPassword.length >= 8 ? 'valid' : ''}`}>
+                          {portalPassword.length >= 8 ? '✓' : '•'} 8+ Characters
                         </span>
-                      ))}
+                        <span className={`rule-chip ${/[A-Z]/.test(portalPassword) ? 'valid' : ''}`}>
+                          {/[A-Z]/.test(portalPassword) ? '✓' : '•'} 1 Uppercase Letter
+                        </span>
+                        <span className={`rule-chip ${/[a-z]/.test(portalPassword) ? 'valid' : ''}`}>
+                          {/[a-z]/.test(portalPassword) ? '✓' : '•'} 1 Lowercase Letter
+                        </span>
+                        <span className={`rule-chip ${/\d/.test(portalPassword) ? 'valid' : ''}`}>
+                          {/\d/.test(portalPassword) ? '✓' : '•'} 1 Number
+                        </span>
+                        <span className={`rule-chip ${/[!@#$%^&*]/.test(portalPassword) ? 'valid' : ''}`}>
+                          {/[!@#$%^&*]/.test(portalPassword) ? '✓' : '•'} 1 Special (!@#$%^&*)
+                        </span>
+                      </div>
                     </div>
-                  </div>
+
+                    {!isPasswordValid && portalPassword.length > 0 && (
+                      <div className="field-validation-msg error" style={{ marginTop: '0.5rem' }}>
+                        ⚠️ Password does not meet all portal criteria yet. Click &quot;Suggest Secure Password&quot; if you need a quick compliant option.
+                      </div>
+                    )}
+
+                    {!isFormComplete && (
+                      <div className="incomplete-fields-callout">
+                        <div className="incomplete-title">
+                          <span>⚠️ Complete all required fields to check eligibility ({missingFields.length} remaining):</span>
+                        </div>
+                        <div className="missing-pills-row">
+                          {missingFields.map((f) => (
+                            <span key={f.key as string} className="missing-field-pill">
+                              {f.label.split(' (')[0]}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </>
                 )}
 
                 {/* Mandatory Citizen Gatekeeper Checkbox */}

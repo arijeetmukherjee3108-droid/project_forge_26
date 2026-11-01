@@ -37,6 +37,7 @@ from fastapi.responses import FileResponse
 try:
     from app import extractor, eligibility
     from app.browser_agent import start_application, resume_application
+    from app.ai_form_agent import scan_portal_url
     from app.google_vault import search_google_vault, fetch_google_vault_file
     from app.schemas import (
         AgentStatus,
@@ -52,10 +53,13 @@ try:
         GoogleSearchResponse,
         IntentClassifyRequest,
         IntentClassifyResponse,
+        DynamicScanRequest,
+        DynamicScanResponse,
     )
 except ImportError:
     from backend.app import extractor, eligibility
     from backend.app.browser_agent import start_application, resume_application
+    from backend.app.ai_form_agent import scan_portal_url
     from backend.app.google_vault import search_google_vault, fetch_google_vault_file
     from backend.app.schemas import (
         AgentStatus,
@@ -71,6 +75,8 @@ except ImportError:
         GoogleSearchResponse,
         IntentClassifyRequest,
         IntentClassifyResponse,
+        DynamicScanRequest,
+        DynamicScanResponse,
     )
 
 # ---------------------------------------------------------------------------
@@ -135,6 +141,15 @@ async def serve_mock_portal():
     if mock_file.exists():
         return FileResponse(mock_file, media_type="text/html")
     raise HTTPException(status_code=404, detail="Mock portal not found")
+
+
+@app.get("/{filename}.html", include_in_schema=False)
+async def serve_portal_html(filename: str):
+    """Generically serves any local HTML portal page for live zero-shot testing."""
+    mock_file = STATIC_DIR / f"{filename}.html"
+    if mock_file.exists():
+        return FileResponse(mock_file, media_type="text/html")
+    raise HTTPException(status_code=404, detail=f"Portal page '{filename}.html' not found")
 
 
 @app.post(
@@ -362,3 +377,34 @@ async def google_fetch(body: GoogleFetchRequest) -> ExtractResponse:
     result.profile.source_documents.append(f"saved:{saved_name}")
 
     return result
+
+
+@app.post(
+    "/api/form/scan-dom",
+    response_model=DynamicScanResponse,
+    tags=["dynamic-form"],
+    summary="Zero-shot distill arbitrary government portal DOM and generate action plan",
+)
+async def scan_form_dom(body: DynamicScanRequest) -> DynamicScanResponse:
+    """
+    Scans any arbitrary government portal in India, distills interactive fields
+    into a compact ~400-token JSON blueprint, infers required documents, and uses
+    AI to generate an actionable pre-fill and upload plan.
+    """
+    url = body.portal_url.strip()
+    if not url.startswith(("http://", "https://", "file://")):
+        mock_file = STATIC_DIR / f"{url.lower()}_mock.html"
+        if mock_file.exists():
+            url = f"file://{mock_file.resolve()}"
+        else:
+            url = f"https://{url}.gov.in"
+
+    try:
+        blueprint = await scan_portal_url(url, body.profile)
+        return DynamicScanResponse(**blueprint)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to scan portal DOM: {exc}",
+        ) from exc
+

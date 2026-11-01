@@ -612,115 +612,108 @@ _INTENT_KEYWORD_MAP: dict[str, dict] = {
 
 
 # ---------------------------------------------------------------------------
-# LLM fallback — fires ONLY when keyword score == 0 (ambiguous / conversational)
+# Dynamic AI Intent Navigation — LLM-First Zero-Shot Scheme Reasoning
 # ---------------------------------------------------------------------------
 
-_LLM_SYSTEM_PROMPT = """You are an expert Indian GovTech Navigator.
-Given a citizen's conversational query in English, Hindi, or Hinglish, identify the exact target government scheme.
-Available Schemes:
-- "vidyalakshmi": Higher education scholarships, college fees, student education loans.
-- "pm_kisan": Small/marginal farmer income support (Rs 6,000/yr), agriculture seeds/fertilizer subsidies.
-- "ration_card": Food security, subsidized grain, BPL/Antyodaya cards.
-- "1784": Construction / unorganized labour welfare certificates.
-- "citizen_registration": General citizen portal signup on ServicePlus.
+_LLM_INTENT_SYSTEM_PROMPT = """You are an expert AI Indian GovTech Navigator and Scheme Routing Engine.
+Given any citizen prompt, conversational query, or target scheme/portal description in English, Hindi, or Hinglish:
+1. Identify the exact government scheme, department, state/national service, or portal the citizen wants to apply for or access across India.
+2. If the user mentions a specific state (e.g. Rajasthan, Maharashtra, UP, Bihar, Delhi, Karnataka, MP, etc.), route directly to that state's official service/portal.
+3. Determine:
+   - `matched_service_id`: clean short slug identifier (e.g. "pm_kisan", "vidyalakshmi", "1784", "raj_msme", "up_scholarship", "maha_domicile")
+   - `service_name`: full official name of the scheme/service
+   - `portal_name`: official name of the portal/department
+   - `portal_url`: official web address of the scheme/portal
+   - `category`: "welfare" | "education" | "agriculture" | "health" | "general"
+   - `confidence`: float between 0.0 and 1.0
+   - `explanation`: clear reasoning for the match
+   - `suggested_documents`: array of required documents (e.g. ["income_certificate", "aadhaar", "marksheet", "land_record"])
 
-Respond STRICTLY in JSON format:
+You must respond STRICTLY with a valid JSON object matching this schema:
 {
-  "matched_service_id": "vidyalakshmi",
-  "confidence": 0.96,
-  "explanation": "Citizen is seeking financial assistance for college admission fees.",
-  "suggested_documents": ["marksheet", "income_certificate", "aadhaar"]
-}"""
+  "matched_service_id": "service_slug",
+  "service_name": "Full Official Name of Scheme / Service",
+  "portal_name": "Official Department / Portal Name",
+  "portal_url": "https://portal.gov.in/service_path",
+  "category": "welfare",
+  "confidence": 0.95,
+  "explanation": "Clear justification of how citizen query maps to this official portal.",
+  "suggested_documents": ["income_certificate", "aadhaar"]
+}
+"""
 
-_VALID_SERVICE_IDS = frozenset(SERVICE_RULES.keys())  # exact codebase IDs
 
-
-class _LLMResult:
-    """Lightweight validator for raw LLM dict — no external dependency beyond Pydantic."""
-
-    __slots__ = ("matched_service_id", "confidence", "explanation", "suggested_documents")
-
-    def __init__(self, data: dict) -> None:
-        sid = str(data.get("matched_service_id", "")).strip()
-        if sid not in _VALID_SERVICE_IDS:
-            raise ValueError(f"Invalid matched_service_id: {sid!r}")
-        self.matched_service_id = sid
-
-        raw_conf = data.get("confidence", 0.0)
-        try:
-            conf = float(raw_conf)
-        except (TypeError, ValueError):
-            conf = 0.0
-        self.confidence = max(0.0, min(1.0, conf))  # clamp to [0, 1]
-
-        self.explanation = str(data.get("explanation") or "LLM matched scheme.")
-
-        raw_docs = data.get("suggested_documents") or []
-        self.suggested_documents = (
-            [str(d) for d in raw_docs] if isinstance(raw_docs, list) else []
+def classify_citizen_intent(text: str) -> IntentClassifyResponse:
+    """
+    Classify the citizen's prompt/voice transcript using the Groq LLM directly.
+    Zero-shot semantic understanding with dynamic portal routing.
+    """
+    raw = (text or "").strip()
+    if not raw:
+        return IntentClassifyResponse(
+            matched_service_id="1784",
+            service_name="ServicePlus Citizen Self-Registration",
+            portal_name="National ServicePlus Portal",
+            portal_url="https://serviceonline.gov.in/citizenRegistration.html",
+            category="general",
+            confidence=0.5,
+            explanation="No query provided; defaulted to ServicePlus.",
+            suggested_documents=["income_certificate", "aadhaar"],
         )
 
-
-def _llm_classify_intent(raw_query: str) -> "IntentClassifyResponse | None":
-    """
-    Call the Groq LLM and return an IntentClassifyResponse, or None if the
-    LLM is unavailable, returns invalid data, or times out.
-    Imports llm_client lazily so a missing groq package never breaks the module.
-    """
+    # 1. ALWAYS CALL THE LLM FIRST (Direct AI Intent Reasoning)
     try:
         try:
             from app.llm_client import chat_json  # type: ignore
         except ImportError:
             from backend.app.llm_client import chat_json  # type: ignore
 
-        raw: dict = chat_json(
-            system_prompt=_LLM_SYSTEM_PROMPT,
-            user_content=raw_query,
+        llm_data = chat_json(
+            system_prompt=_LLM_INTENT_SYSTEM_PROMPT,
+            user_content=f"Citizen query: {raw}",
         )
-        if not raw:
-            return None
 
-        validated = _LLMResult(raw)
-        svc_cfg = SERVICE_RULES[validated.matched_service_id]
-        return IntentClassifyResponse(
-            matched_service_id=validated.matched_service_id,
-            service_name=svc_cfg["name"],
-            confidence=validated.confidence,
-            explanation=validated.explanation,
-            suggested_documents=validated.suggested_documents,
-        )
-    except Exception as exc:  # noqa: BLE001
+        if isinstance(llm_data, dict) and llm_data.get("matched_service_id"):
+            sid = str(llm_data.get("matched_service_id", "1784")).strip()
+            s_name = str(llm_data.get("service_name") or sid)
+            p_name = str(llm_data.get("portal_name") or s_name)
+            p_url = str(llm_data.get("portal_url") or "")
+            cat = str(llm_data.get("category") or "welfare")
+            try:
+                conf = float(llm_data.get("confidence", 0.95))
+            except (TypeError, ValueError):
+                conf = 0.92
+            expl = str(llm_data.get("explanation") or f"AI matched citizen intent to {s_name}.")
+            docs = llm_data.get("suggested_documents")
+            if not isinstance(docs, list) or not docs:
+                docs = ["income_certificate", "aadhaar"]
+
+            return IntentClassifyResponse(
+                matched_service_id=sid,
+                service_name=s_name,
+                portal_name=p_name,
+                portal_url=p_url,
+                category=cat,
+                confidence=conf,
+                explanation=expl,
+                suggested_documents=[str(d) for d in docs],
+            )
+    except Exception as exc:
         import logging as _log
-        _log.getLogger(__name__).warning("LLM intent fallback failed: %s", exc)
-        return None
+        _log.getLogger(__name__).warning("LLM intent call failed, falling back to heuristics: %s", exc)
 
-
-def classify_citizen_intent(text: str) -> IntentClassifyResponse:
-    """
-    Classify the citizen's prompt/voice transcript to the closest government scheme.
-    Uses bilingual (English + Hindi) semantic keyword matching with zero network latency.
-    """
-    raw = (text or "").strip().lower()
-    if not raw:
-        svc_cfg = SERVICE_RULES["1784"]
-        return IntentClassifyResponse(
-            matched_service_id="1784",
-            service_name=svc_cfg["name"],
-            confidence=0.5,
-            explanation="No query text provided; defaulted to ServicePlus 1784.",
-            suggested_documents=["income_certificate", "aadhaar"],
-        )
-
+    # 2. Heuristic fallback ONLY if LLM is unreachable
     best_service_id = "1784"
     best_score = 0
     matched_reason = "General citizen application"
+    raw_lower = raw.lower()
 
     for svc_id, data in _INTENT_KEYWORD_MAP.items():
         score = 0
         for kw in data["keywords"]:
-            if " " in kw and kw in raw:
-                score += 3  # Multi-word phrase exact match gets higher weight
-            elif kw in raw.split() or kw in raw:
+            if " " in kw and kw in raw_lower:
+                score += 3
+            elif kw in raw_lower.split() or kw in raw_lower:
                 score += 1
         if score > best_score:
             best_score = score
@@ -728,28 +721,15 @@ def classify_citizen_intent(text: str) -> IntentClassifyResponse:
             matched_reason = data["description"]
 
     svc_cfg = SERVICE_RULES.get(best_service_id, SERVICE_RULES["1784"])
-    service_name = svc_cfg["name"]
-
-    if best_score >= 3:
-        confidence = 0.95
-    elif best_score == 2:
-        confidence = 0.88
-    elif best_score == 1:
-        confidence = 0.78
-    else:
-        # No keyword matched — try the LLM fallback before accepting the default.
-        llm_result = _llm_classify_intent(raw)
-        if llm_result is not None:
-            return llm_result
-        confidence = 0.60
-        matched_reason = "Query did not strongly match a specific scheme; defaulted to ServicePlus 1784."
-
     suggested_docs = _INTENT_KEYWORD_MAP.get(best_service_id, {}).get("default_docs", ["aadhaar"])
 
     return IntentClassifyResponse(
         matched_service_id=best_service_id,
-        service_name=service_name,
-        confidence=confidence,
+        service_name=svc_cfg["name"],
+        portal_name="National Portal",
+        portal_url="https://serviceonline.gov.in/citizenRegistration.html",
+        category="general",
+        confidence=0.75,
         explanation=matched_reason,
         suggested_documents=suggested_docs,
     )

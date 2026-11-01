@@ -33,7 +33,13 @@ try:
         ActionType,
         PortalConfig,
         PortalStep,
+        PORTAL_REGISTRY,
         get_portal_config,
+    )
+    from app.ai_form_agent import (
+        distill_form_dom,
+        generate_action_plan,
+        execute_dynamic_action_plan,
     )
     from app.schemas import (
         AgentStatus,
@@ -46,7 +52,13 @@ except ImportError:
         ActionType,
         PortalConfig,
         PortalStep,
+        PORTAL_REGISTRY,
         get_portal_config,
+    )
+    from backend.app.ai_form_agent import (
+        distill_form_dom,
+        generate_action_plan,
+        execute_dynamic_action_plan,
     )
     from backend.app.schemas import (
         AgentStatus,
@@ -87,12 +99,15 @@ class BrowserSession:
     browser: Browser
     context: BrowserContext
     page: Page
-    portal_config: PortalConfig
     profile: CitizenProfile
+    portal_config: Optional[PortalConfig] = None
     status: AgentStatus = AgentStatus.running
     steps_completed: List[str] = field(default_factory=list)
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     document_path: Optional[str] = None
+    is_dynamic: bool = False
+    captcha_input_selector: Optional[str] = None
+    submit_button_selector: Optional[str] = None
 
 
 # In-memory session store — safe for a single-process hackathon demo.
@@ -315,15 +330,6 @@ async def start_application(
     session_id = uuid.uuid4().hex[:12]
     portal_id = _resolve_portal_id(service_id)
 
-    try:
-        config = get_portal_config(portal_id)
-    except KeyError as exc:
-        return ApplyStartResponse(
-            session_id=session_id,
-            status=AgentStatus.failed,
-            message=str(exc),
-        )
-
     # Resolve uploaded document path.
     doc_path: Optional[str] = None
     if document_filename:
@@ -333,15 +339,67 @@ async def start_application(
 
     # Determine headless mode.
     headless = os.getenv("BROWSER_HEADLESS", "false").lower() in ("1", "true", "yes")
-
     pw = await async_playwright().start()
+
     try:
+        # ---- Path 1: Deterministic Fast-Path (0 tokens, 0ms latency) ----
+        if portal_id in PORTAL_REGISTRY:
+            config = PORTAL_REGISTRY[portal_id]
+            browser = await pw.chromium.launch(
+                headless=headless,
+                slow_mo=100,
+            )
+            context = await browser.new_context(
+                ignore_https_errors=config.ignore_https_errors,
+                viewport={"width": 1280, "height": 800},
+            )
+            page = await context.new_page()
+
+            session = BrowserSession(
+                session_id=session_id,
+                pw=pw,
+                browser=browser,
+                context=context,
+                page=page,
+                portal_config=config,
+                profile=profile,
+                document_path=doc_path,
+                is_dynamic=False,
+            )
+            _active_sessions[session_id] = session
+
+            for step in config.steps:
+                result = await _execute_step(page, step, session)
+                if result is not None:
+                    return result
+
+            session.status = AgentStatus.submitted
+            preview = await _screenshot_page_b64(page)
+            return ApplyStartResponse(
+                session_id=session_id,
+                status=session.status,
+                message="All steps completed — no CAPTCHA checkpoint was needed.",
+                page_preview_b64=preview,
+                steps_completed=list(session.steps_completed),
+            )
+
+        # ---- Path 2: Task 3: Zero-Shot Dynamic DOM Reasoner (Any Portal in India) ----
+        sid = service_id.strip()
+        if sid.startswith(("http://", "https://", "file://")):
+            entry_url = sid
+        elif getattr(profile, "target_portal_url", None) and profile.target_portal_url.startswith(("http://", "https://", "file://")):
+            entry_url = profile.target_portal_url
+        elif (Path(__file__).resolve().parent.parent / "static" / f"{sid.lower()}_mock.html").exists():
+            entry_url = f"file://{(Path(__file__).resolve().parent.parent / 'static' / f'{sid.lower()}_mock.html').resolve()}"
+        else:
+            entry_url = getattr(profile, "target_portal_url", None) or f"https://{sid}.gov.in"
+
         browser = await pw.chromium.launch(
             headless=headless,
-            slow_mo=100,  # slight slowdown so judges can follow
+            slow_mo=100,
         )
         context = await browser.new_context(
-            ignore_https_errors=config.ignore_https_errors,
+            ignore_https_errors=True,
             viewport={"width": 1280, "height": 800},
         )
         page = await context.new_page()
@@ -352,27 +410,82 @@ async def start_application(
             browser=browser,
             context=context,
             page=page,
-            portal_config=config,
+            portal_config=None,
             profile=profile,
             document_path=doc_path,
+            is_dynamic=True,
         )
         _active_sessions[session_id] = session
 
-        # Execute steps until a CHECKPOINT returns a response.
-        for step in config.steps:
-            result = await _execute_step(page, step, session)
-            if result is not None:
-                # CHECKPOINT reached — return control to user.
-                return result
+        # 1. Open unmapped government portal
+        await page.goto(entry_url, timeout=15000, wait_until="domcontentloaded")
+        session.steps_completed.append(f"Navigated to {entry_url}")
 
-        # All steps completed with no checkpoint (unusual but safe).
+        # 2. Distill form DOM into compact ~400-token JSON
+        distilled = await distill_form_dom(page)
+        session.steps_completed.append(f"Scanned live DOM: {len(distilled.get('fields', []))} fields detected")
+
+        # 3. Generate Action Plan using LLM / Heuristics
+        plan = generate_action_plan(distilled, profile)
+        session.steps_completed.append(f"AI generated zero-shot action plan with {len(plan)} actions")
+
+        # 4. Execute dynamic plan
+        completed_steps = await execute_dynamic_action_plan(page, plan, doc_path)
+        session.steps_completed.extend(completed_steps)
+
+        # 5. Checkpoint detection: CAPTCHA
+        captcha_img_selectors = ["#imgCaptcha", "#captchaImage", "img[src*='captcha']", ".captcha-img", "img[alt*='captcha']"]
+        captcha_inp_selectors = ["#inpCaptcha", "#captchaAnswer", "#txtCaptcha", "input[name*='captcha']", "input[id*='captcha']"]
+        submit_btn_selectors = ["#btnSubmit", "#btnRegister", "button[type='submit']", "input[type='submit']"]
+
+        captcha_b64 = None
+        for sel in captcha_img_selectors:
+            try:
+                el = await page.wait_for_selector(sel, state="visible", timeout=1500)
+                if el:
+                    png_bytes = await el.screenshot(type="png")
+                    captcha_b64 = base64.b64encode(png_bytes).decode()
+                    break
+            except Exception:
+                continue
+
+        for sel in captcha_inp_selectors:
+            try:
+                el = await page.wait_for_selector(sel, state="visible", timeout=1000)
+                if el:
+                    session.captcha_input_selector = sel
+                    break
+            except Exception:
+                continue
+
+        for sel in submit_btn_selectors:
+            try:
+                el = await page.wait_for_selector(sel, state="visible", timeout=1000)
+                if el:
+                    session.submit_button_selector = sel
+                    break
+            except Exception:
+                continue
+
+        preview_b64 = await _screenshot_page_b64(page)
+
+        if captcha_b64:
+            session.status = AgentStatus.awaiting_captcha
+            return ApplyStartResponse(
+                session_id=session.session_id,
+                status=session.status,
+                message="Dynamic agent paused — please solve the CAPTCHA and approve.",
+                captcha_image_b64=captcha_b64,
+                page_preview_b64=preview_b64,
+                steps_completed=list(session.steps_completed),
+            )
+
         session.status = AgentStatus.submitted
-        preview = await _screenshot_page_b64(page)
         return ApplyStartResponse(
             session_id=session_id,
             status=session.status,
-            message="All steps completed — no CAPTCHA checkpoint was needed.",
-            page_preview_b64=preview,
+            message="Zero-shot form filling completed.",
+            page_preview_b64=preview_b64,
             steps_completed=list(session.steps_completed),
         )
 
@@ -420,9 +533,13 @@ async def resume_application(
                 message="User chose not to approve. Session closed.",
             )
 
-        # Locate and fill captcha_text into the CAPTCHA input element with typing delay.
+        # Locate and fill captcha_text into the CAPTCHA input element
+        captcha_selectors = (
+            config.captcha_input_selectors if config else
+            ([session.captcha_input_selector] if session.captcha_input_selector else ["#inpCaptcha", "#captchaAnswer", "#txtCaptcha", "input[name*='captcha']"])
+        )
         captcha_input = await _resolve_element(
-            page, config.captcha_input_selectors, timeout_ms=5000
+            page, captcha_selectors, timeout_ms=5000
         )
         await captcha_input.fill("")
         await captcha_input.type(captcha_text, delay=50)
@@ -430,10 +547,14 @@ async def resume_application(
 
         # Locate, scroll, and highlight Submit button
         submit_btn = None
-        if config.submit_button_selectors:
+        submit_selectors = (
+            config.submit_button_selectors if config else
+            ([session.submit_button_selector] if session.submit_button_selector else ["#btnSubmit", "#btnRegister", "button[type='submit']", "input[type='submit']"])
+        )
+        if submit_selectors:
             try:
                 submit_btn = await _resolve_element(
-                    page, config.submit_button_selectors, timeout_ms=5000
+                    page, submit_selectors, timeout_ms=5000
                 )
                 await submit_btn.scroll_into_view_if_needed()
                 await page.evaluate(

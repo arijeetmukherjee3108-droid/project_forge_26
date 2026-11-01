@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Rajasthan MSME Portal — Scheme Application</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f1f5f9; padding: 2rem; color: #1e293b; }
+    .form-box { max-width: 600px; margin: 0 auto; background: white; padding: 2rem; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); border-top: 4px solid #f97316; }
+    h2 { margin-top: 0; color: #c2410c; }
+    .subtitle { color: #64748b; font-size: 0.9rem; margin-bottom: 1.5rem; }
+    .field-group { margin-bottom: 1.25rem; }
+    label { display: block; font-weight: 600; margin-bottom: 0.4rem; font-size: 0.88rem; }
+    input[type="text"], select { width: 100%; padding: 0.65rem; border: 1px solid #cbd5e1; border-radius: 6px; box-sizing: border-box; }
+    .checkbox-wrap { display: flex; align-items: center; gap: 0.5rem; }
+    .captcha-wrap { display: flex; align-items: center; gap: 1rem; margin-top: 1rem; }
+    .captcha-img { background: #334155; color: #f8fafc; font-family: monospace; font-size: 1.3rem; letter-spacing: 4px; padding: 0.4rem 1rem; border-radius: 4px; font-weight: bold; }
+    button { background: #ea580c; color: white; border: none; padding: 0.75rem 1.5rem; border-radius: 6px; font-weight: 600; cursor: pointer; margin-top: 1.5rem; }
+    button:hover { background: #c2410c; }
+  </style>
+</head>
+<body>
+  <div class="form-box">
+    <h2>उद्योग एवं वाणिज्य विभाग — राजस्थान सरकार</h2>
+    <div class="subtitle">Rajasthan Micro, Small & Medium Enterprises (MSME) Registration & Subsidy</div>
+
+    <form id="msmeForm" onsubmit="event.preventDefault(); alert('Application Submitted Successfully!');">
+      <div class="field-group">
+        <label for="inp_name">आवेदक का नाम (Applicant Name)</label>
+        <input type="text" id="inp_name" name="applicant_name" placeholder="Enter Full Name" required />
+      </div>
+
+      <div class="field-group">
+        <label for="inp_father">पिता का नाम (Father's Name)</label>
+        <input type="text" id="inp_father" name="father_name" placeholder="Enter Father's Name" required />
+      </div>
+
+      <div class="field-group">
+        <label for="sel_state">Domicile State</label>
+        <select id="sel_state" name="domicile_state">
+          <option value="">-- Select State --</option>
+          <option value="BIHAR">BIHAR</option>
+          <option value="GUJARAT">GUJARAT</option>
+          <option value="RAJASTHAN">RAJASTHAN</option>
+        </select>
+      </div>
+
+      <div class="field-group">
+        <label for="file_doc">Upload Income Certificate (PDF only, max 200 KB)</label>
+        <input type="file" id="file_doc" name="income_certificate" accept=".pdf" />
+      </div>
+
+      <div class="field-group checkbox-wrap">
+        <input type="checkbox" id="chk_agree" name="declaration" />
+        <label for="chk_agree" style="margin-bottom: 0;">I hereby declare that details are accurate.</label>
+      </div>
+
+      <div class="captcha-wrap">
+        <div id="imgCaptcha" class="captcha-img">RJ982</div>
+        <input type="text" id="inpCaptcha" name="captcha" placeholder="Enter CAPTCHA" style="width: 140px;" />
+      </div>
+
+      <button type="submit" id="btnSubmit">Submit MSME Application</button>
+    </form>
+  </div>
+</body>
+</html>
