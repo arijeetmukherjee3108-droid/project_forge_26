@@ -867,8 +867,7 @@ const App: React.FC = () => {
       setExtraction(MOCK_EXTRACTION);
       setProfile(MOCK_EXTRACTION.profile);
       setUncertainFields(MOCK_EXTRACTION.uncertain_fields);
-      showToast('Document parsed with AI extraction!', 'success');
-      setCurrentStep(3);
+      showToast('Document parsed successfully! Review extracted data below.', 'success');
       setLoading(false);
       return;
     }
@@ -878,8 +877,7 @@ const App: React.FC = () => {
       setExtraction(resp);
       setProfile(resp.profile);
       setUncertainFields(resp.uncertain_fields);
-      showToast(resp.message, 'success');
-      setCurrentStep(3);
+      showToast('Document parsed successfully! Review extracted data below.', 'success');
     } catch {
       showToast('Extraction failed – make sure backend is reachable.', 'error');
     } finally {
@@ -1185,9 +1183,13 @@ const App: React.FC = () => {
       const targetServiceId = selectedService?.service_id || profile.target_service_id || '1784';
       const resp = await checkEligibility(profile, targetServiceId);
       setEligibility(resp);
-      showToast(`Eligibility verified for ${resp.service_name || selectedService?.service_name || 'Service'}!`, 'success');
+      showToast(`Verification complete for ${resp.service_name || selectedService?.service_name || 'Registration'}!`, 'success');
+      if (resp.eligible) {
+        await new Promise((r) => setTimeout(r, 700));
+        setCurrentStep(4);
+      }
     } catch {
-      showToast('Eligibility check failed.', 'error');
+      showToast('Verification check could not be completed. Please ensure backend is running.', 'error');
     } finally {
       setLoading(false);
     }
@@ -1531,7 +1533,7 @@ const App: React.FC = () => {
                       }}
                       title="Directly automate submission on official portals with AI Agent"
                     >
-                      ⚡ Auto-Apply
+                      Auto-Apply
                     </button>
                     <button
                       type="button"
@@ -1542,7 +1544,7 @@ const App: React.FC = () => {
                       }}
                       title="Verify criteria, income limits, and required documents before applying"
                     >
-                      🔍 Check Eligibility
+                      Check Eligibility
                     </button>
                   </div>
 
@@ -1558,7 +1560,6 @@ const App: React.FC = () => {
                           setPromptIndex(0);
                         }}
                       >
-                        <span>{cat.icon}</span>
                         <span>{cat.label}</span>
                       </button>
                     ))}
@@ -1589,7 +1590,7 @@ const App: React.FC = () => {
                           </div>
                           <div className="scheme-suggest-title">{item.text}</div>
                           <div className="scheme-suggest-footer">
-                            <span>💬 Ask AI Advisor</span>
+                            <span>Ask AI Advisor</span>
                             <span>→</span>
                           </div>
                         </div>
@@ -1601,7 +1602,7 @@ const App: React.FC = () => {
                 <div className="advisor-chat-container">
                   <div className="advisor-chat-header">
                     <div className="advisor-header-title">
-                      <span style={{ fontSize: '1.25rem' }}>🤖</span>
+                      <div className="assistant-avatar" style={{ width: '28px', height: '28px', fontSize: '0.75rem', fontWeight: 700 }}>AI</div>
                       <div>
                         <div style={{ fontWeight: 600, color: '#f8fafc', fontSize: '0.96rem' }}>
                           GovTech AI Advisor & Scheme Navigator
@@ -1629,7 +1630,7 @@ const App: React.FC = () => {
                     {advisorChat.map((msg) => (
                       <div key={msg.id} className={`chat-bubble-row ${msg.sender}`}>
                         {msg.sender === 'assistant' && (
-                          <div className="assistant-avatar">✨</div>
+                          <div className="assistant-avatar" style={{ fontSize: '0.75rem', fontWeight: 700 }}>AI</div>
                         )}
 
                         <div className={`chat-bubble ${msg.sender}`}>
@@ -1641,8 +1642,7 @@ const App: React.FC = () => {
                           {msg.schemeMatch && msg.schemeMatch.message_type !== 'chat' && msg.schemeMatch.service_id !== 'general_chat' && (
                             <div className="chat-scheme-card">
                               <div className="chat-scheme-title-row">
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
-                                  <span style={{ fontSize: '1.2rem' }}>🏛️</span>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                                   <div>
                                     <div className="chat-scheme-name">{msg.schemeMatch.service_name}</div>
                                     <div style={{ fontSize: '0.78rem', color: '#94a3b8' }}>
@@ -1675,7 +1675,7 @@ const App: React.FC = () => {
                               {/* Why Portal Was Chosen */}
                               {msg.schemeMatch.reason_chosen && (
                                 <div style={{ fontSize: '0.8rem', background: 'rgba(56, 189, 248, 0.06)', borderLeft: '3px solid #38bdf8', padding: '0.45rem 0.65rem', borderRadius: '4px', color: '#cbd5e1' }}>
-                                  <strong style={{ color: '#38bdf8' }}>💡 Why this portal: </strong>
+                                  <strong style={{ color: '#38bdf8' }}>Why this portal: </strong>
                                   {msg.schemeMatch.reason_chosen}
                                 </div>
                               )}
@@ -1684,7 +1684,7 @@ const App: React.FC = () => {
                               {msg.schemeMatch.fields_to_fill && msg.schemeMatch.fields_to_fill.length > 0 && (
                                 <div style={{ marginTop: '0.2rem' }}>
                                   <div style={{ fontSize: '0.75rem', color: '#94a3b8', fontWeight: 600, marginBottom: '0.3rem' }}>
-                                    📋 AGENT WILL PRE-FILL THESE FIELDS:
+                                    PRE-FILLED APPLICATION FIELDS:
                                   </div>
                                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.3rem' }}>
                                     {msg.schemeMatch.fields_to_fill.map((f, fi) => (
@@ -1699,12 +1699,12 @@ const App: React.FC = () => {
                               {/* Discovered Required Documents to Attach */}
                               <div style={{ marginTop: '0.2rem' }}>
                                 <div style={{ fontSize: '0.75rem', color: '#94a3b8', fontWeight: 600, marginBottom: '0.3rem' }}>
-                                  📎 REQUIRED DOCUMENTS TO ATTACH:
+                                  REQUIRED DOCUMENTS TO ATTACH:
                                 </div>
                                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem' }}>
                                   {msg.schemeMatch.required_documents.map((doc, di) => (
                                     <span key={di} className="scheme-doc-pill" style={{ fontSize: '0.75rem', padding: '0.2rem 0.55rem', background: 'rgba(56, 189, 248, 0.12)', borderColor: 'rgba(56, 189, 248, 0.3)', color: '#38bdf8' }}>
-                                      📎 {doc}
+                                      {doc}
                                     </span>
                                   ))}
                                 </div>
@@ -1713,7 +1713,7 @@ const App: React.FC = () => {
                               {/* Limitations & Verification Disclosure */}
                               {msg.schemeMatch.limitations && (
                                 <div style={{ fontSize: '0.76rem', color: '#f59e0b', background: 'rgba(245, 158, 11, 0.08)', border: '1px solid rgba(245, 158, 11, 0.25)', padding: '0.4rem 0.65rem', borderRadius: '6px' }}>
-                                  <span>⚠️ <strong>Portal Checkpoint:</strong> {msg.schemeMatch.limitations}</span>
+                                  <span><strong>Portal Checkpoint:</strong> {msg.schemeMatch.limitations}</span>
                                 </div>
                               )}
 
@@ -1734,7 +1734,7 @@ const App: React.FC = () => {
                                       </>
                                     ) : (
                                       <>
-                                        <span>🚀 {msg.schemeMatch.cta_message || 'Proceed to Document Hub'}</span>
+                                        <span>{msg.schemeMatch.cta_message || 'Proceed to Document Hub'}</span>
                                         <span>→</span>
                                       </>
                                     )}
@@ -1889,12 +1889,11 @@ const App: React.FC = () => {
                 <div style={{ marginBottom: '1.25rem', background: 'rgba(255, 255, 255, 0.03)', border: '1px solid rgba(255, 255, 255, 0.08)', borderRadius: '12px', padding: '1rem 1.25rem' }}>
                   <div style={{ fontSize: '0.8rem', fontWeight: 700, color: '#f8fafc', marginBottom: '0.65rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                     <span style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
-                      <span>📎</span>
                       <span>REQUIRED DOCUMENTS FOR THIS APPLICATION:</span>
                     </span>
                     {dynamicBlueprint?.required_documents_meta && dynamicBlueprint.required_documents_meta.length > 0 && (
                       <span style={{ fontSize: '0.68rem', color: '#38bdf8', background: 'rgba(56, 189, 248, 0.12)', border: '1px solid rgba(56, 189, 248, 0.25)', padding: '0.15rem 0.5rem', borderRadius: '4px' }}>
-                        ⚡ Live Portal DOM Verified
+                        Live Portal Verified
                       </span>
                     )}
                   </div>
@@ -1958,21 +1957,10 @@ const App: React.FC = () => {
                     )}
                   </div>
 
-                  {/* Auto-Compression Assurance Callout */}
-                  <div style={{ marginTop: '0.85rem', background: 'rgba(16, 185, 129, 0.08)', border: '1px solid rgba(16, 185, 129, 0.25)', borderRadius: '8px', padding: '0.65rem 0.9rem', display: 'flex', alignItems: 'flex-start', gap: '0.6rem' }}>
-                    <span style={{ fontSize: '1.1rem', lineHeight: 1 }}>🛡️</span>
-                    <div style={{ fontSize: '0.76rem', color: '#a7f3d0', lineHeight: 1.5 }}>
-                      <strong style={{ color: '#34d399' }}>Smart Document Auto-Compressor Active:</strong> You don't need to worry about the file size of your documents. If your uploaded document exceeds portal limits (e.g. 200 KB), our built-in PyMuPDF optimization engine will automatically compress and format it to exact portal specifications with zero quality loss.
-                    </div>
+                  {/* Auto-Compression Assurance Callout (Concise, zero clutter) */}
+                  <div style={{ marginTop: '0.75rem', background: 'rgba(16, 185, 129, 0.06)', border: '1px solid rgba(16, 185, 129, 0.2)', borderRadius: '8px', padding: '0.45rem 0.75rem', fontSize: '0.76rem', color: '#a7f3d0' }}>
+                    <strong style={{ color: '#34d399' }}>Smart Auto-Compression:</strong> Files are automatically compressed to meet official portal size limits.
                   </div>
-
-                  {/* Limitations or Portal Note */}
-                  {selectedService?.limitations && (
-                    <div style={{ fontSize: '0.75rem', color: '#f59e0b', marginTop: '0.65rem', display: 'flex', alignItems: 'flex-start', gap: '0.4rem', background: 'rgba(245, 158, 11, 0.06)', border: '1px solid rgba(245, 158, 11, 0.2)', padding: '0.5rem 0.75rem', borderRadius: '6px' }}>
-                      <span style={{ lineHeight: 1.2 }}>⚠️</span>
-                      <span style={{ lineHeight: 1.4 }}><strong>Note:</strong> {selectedService.limitations}</span>
-                    </div>
-                  )}
                 </div>
               )}
 
@@ -2040,10 +2028,9 @@ const App: React.FC = () => {
               {file && (
                 <div className="attached-file-pill">
                   <div className="file-info">
-                    <span>📎</span>
                     <span>{file.name} ({(file.size / 1024).toFixed(1)} KB)</span>
                   </div>
-                  <button className="file-delete-btn" onClick={() => setFile(null)}>✕</button>
+                  <button className="file-delete-btn" onClick={() => { setFile(null); setExtraction(null); }}>✕</button>
                 </div>
               )}
 
@@ -2056,15 +2043,76 @@ const App: React.FC = () => {
                   disabled={!file || loading}
                   onClick={handleUpload}
                 >
-                  {loading ? 'Extracting Data…' : 'Extract Fields'}
+                  {loading ? 'Extracting Data…' : 'Extract Document Details'}
                 </button>
               </div>
 
-              {extraction && (
-                <div className="raw-extraction-preview">
-                  <strong>AI Raw Text Preview:</strong>
-                  <br />
-                  {extraction.raw_text_preview}
+              {/* Extracted Document Preview Card (shows extracted data before proceeding) */}
+              {extraction && extraction.profile && (
+                <div style={{ marginTop: '1.5rem', background: 'rgba(56, 189, 248, 0.05)', border: '1px solid rgba(56, 189, 248, 0.25)', borderRadius: '12px', padding: '1.25rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.85rem' }}>
+                    <div style={{ fontWeight: 700, fontSize: '0.92rem', color: '#f8fafc' }}>
+                      Extracted Document Data
+                    </div>
+                    <span style={{ fontSize: '0.72rem', background: 'rgba(34, 197, 94, 0.15)', border: '1px solid rgba(34, 197, 94, 0.35)', color: '#4ade80', padding: '0.2rem 0.6rem', borderRadius: '12px' }}>
+                      Verified Extraction
+                    </span>
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '0.65rem', marginBottom: '1.1rem' }}>
+                    {extraction.profile.full_name && (
+                      <div style={{ background: 'rgba(255, 255, 255, 0.03)', padding: '0.55rem 0.75rem', borderRadius: '8px', border: '1px solid rgba(255, 255, 255, 0.06)' }}>
+                        <div style={{ fontSize: '0.7rem', color: '#94a3b8' }}>Full Name</div>
+                        <div style={{ fontSize: '0.85rem', color: '#f1f5f9', fontWeight: 600 }}>{extraction.profile.full_name}</div>
+                      </div>
+                    )}
+                    {extraction.profile.father_or_guardian_name && (
+                      <div style={{ background: 'rgba(255, 255, 255, 0.03)', padding: '0.55rem 0.75rem', borderRadius: '8px', border: '1px solid rgba(255, 255, 255, 0.06)' }}>
+                        <div style={{ fontSize: '0.7rem', color: '#94a3b8' }}>Father/Guardian Name</div>
+                        <div style={{ fontSize: '0.85rem', color: '#f1f5f9', fontWeight: 600 }}>{extraction.profile.father_or_guardian_name}</div>
+                      </div>
+                    )}
+                    {extraction.profile.date_of_birth && (
+                      <div style={{ background: 'rgba(255, 255, 255, 0.03)', padding: '0.55rem 0.75rem', borderRadius: '8px', border: '1px solid rgba(255, 255, 255, 0.06)' }}>
+                        <div style={{ fontSize: '0.7rem', color: '#94a3b8' }}>Date of Birth</div>
+                        <div style={{ fontSize: '0.85rem', color: '#f1f5f9', fontWeight: 600 }}>{extraction.profile.date_of_birth}</div>
+                      </div>
+                    )}
+                    {extraction.profile.gender && (
+                      <div style={{ background: 'rgba(255, 255, 255, 0.03)', padding: '0.55rem 0.75rem', borderRadius: '8px', border: '1px solid rgba(255, 255, 255, 0.06)' }}>
+                        <div style={{ fontSize: '0.7rem', color: '#94a3b8' }}>Gender</div>
+                        <div style={{ fontSize: '0.85rem', color: '#f1f5f9', fontWeight: 600 }}>{extraction.profile.gender}</div>
+                      </div>
+                    )}
+                    {extraction.profile.state && (
+                      <div style={{ background: 'rgba(255, 255, 255, 0.03)', padding: '0.55rem 0.75rem', borderRadius: '8px', border: '1px solid rgba(255, 255, 255, 0.06)' }}>
+                        <div style={{ fontSize: '0.7rem', color: '#94a3b8' }}>State</div>
+                        <div style={{ fontSize: '0.85rem', color: '#f1f5f9', fontWeight: 600 }}>{extraction.profile.state}</div>
+                      </div>
+                    )}
+                    {extraction.profile.mobile_number && (
+                      <div style={{ background: 'rgba(255, 255, 255, 0.03)', padding: '0.55rem 0.75rem', borderRadius: '8px', border: '1px solid rgba(255, 255, 255, 0.06)' }}>
+                        <div style={{ fontSize: '0.7rem', color: '#94a3b8' }}>Mobile Number</div>
+                        <div style={{ fontSize: '0.85rem', color: '#f1f5f9', fontWeight: 600 }}>{extraction.profile.mobile_number}</div>
+                      </div>
+                    )}
+                    {extraction.profile.annual_income !== undefined && extraction.profile.annual_income !== null && (
+                      <div style={{ background: 'rgba(255, 255, 255, 0.03)', padding: '0.55rem 0.75rem', borderRadius: '8px', border: '1px solid rgba(255, 255, 255, 0.06)' }}>
+                        <div style={{ fontSize: '0.7rem', color: '#94a3b8' }}>Annual Income</div>
+                        <div style={{ fontSize: '0.85rem', color: '#f1f5f9', fontWeight: 600 }}>₹{Number(extraction.profile.annual_income).toLocaleString('en-IN')}</div>
+                      </div>
+                    )}
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
+                    <button
+                      type="button"
+                      className="gemini-btn gemini-btn-primary"
+                      onClick={() => setCurrentStep(3)}
+                    >
+                      Review & Verify Details →
+                    </button>
+                  </div>
                 </div>
               )}
             </div>
@@ -2089,61 +2137,44 @@ const App: React.FC = () => {
 
             // Validation logic based on active portal
             const isMobileValid = Boolean(profile.mobile_number && /^\d{10}$/.test(profile.mobile_number.trim()));
-            const isEmailValid = Boolean(profile.email && /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(profile.email.trim()));
-            const isPincodeValid = Boolean(profile.pincode && /^\d{6}$/.test(profile.pincode.trim()));
+            const isEmailValid = !profile.email || /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(profile.email.trim());
+            const isPincodeValid = !profile.pincode || /^\d{6}$/.test(profile.pincode.trim());
 
-            let isFormComplete = false;
-            let missingFields: FieldMeta[] = [];
+            // Core required fields across any portal: Full Name, 10-digit Mobile, State
+            const hasCoreFields = Boolean(
+              profile.full_name &&
+              profile.full_name.trim().length >= 2 &&
+              isMobileValid &&
+              profile.state &&
+              profile.state.trim().length >= 2
+            );
 
-            if (isVidyaLakshmi) {
-              // Vidya Lakshmi requires student fields
-              isFormComplete = Boolean(profile.full_name && isEmailValid && isMobileValid && profile.date_of_birth && profile.state);
-            } else if (isDynamicPortal) {
-              // Dynamic form fields validation
-              const dynamicFields = dynamicBlueprint?.fields || [];
-              const requiredCount = dynamicFields.filter(f => f.type !== 'file' && f.type !== 'checkbox').length;
-              const filledCount = dynamicFields.filter(f => {
-                const v = dynamicFormValues[f.selector];
-                return v !== undefined && v !== null && String(v).trim() !== '';
-              }).length;
-              isFormComplete = filledCount >= Math.min(requiredCount, 2);
-            } else {
-              // ServicePlus requires all standard registration fields
-              missingFields = FORM_FIELDS.filter((f) => {
-                const val = (profile as any)[f.key];
-                if (val === undefined || val === null || String(val).trim() === '') return true;
-                if (f.key === 'mobile_number') return !isMobileValid;
-                if (f.key === 'email') return !isEmailValid;
-                if (f.key === 'pincode') return !isPincodeValid;
-                return false;
-              });
-              isFormComplete = missingFields.length === 0;
-            }
+            let isFormComplete = hasCoreFields && isEmailValid && isPincodeValid;
+
+            // Filter out navigation or toggle artifacts from dynamic portal DOM
+            const genuineDynamicFields = (dynamicBlueprint?.fields || []).filter(f => {
+              const lbl = (f.label || '').toLowerCase();
+              const sel = (f.selector || '').toLowerCase();
+              if (!f.label || f.label.trim().length < 3) return false;
+              if (/menu|nav|toggle|sidebar|search|header|footer|theme|mode|hamburger/i.test(sel) || /menu|navigation|toggle/i.test(lbl)) return false;
+              return true;
+            });
 
             return (
               <div className="gemini-card">
                 <h2 className="card-title">
-                  {isVidyaLakshmi
-                    ? 'Verify Student Profile for Vidya Lakshmi'
-                    : isDynamicPortal
-                    ? `Verify Form Fields for ${dynamicBlueprint?.title || selectedService?.portal_name || 'Government Portal'}`
-                    : 'Verify Extracted Citizen Data for ServicePlus'}
+                  Verify Application Details for {selectedService?.service_name || selectedService?.portal_name || 'Registration'}
                 </h2>
                 <p className="card-desc">
-                  {isVidyaLakshmi
-                    ? 'Vidya Lakshmi CELAF Student Registration: Confirm your personal contact and education loan details.'
-                    : isDynamicPortal
-                    ? 'Zero-Shot AI Dynamic Reasoner: Fields distilled in real-time from the live government portal.'
-                    : 'Fields flagged with Review require your confirmation. You can edit any value.'}
+                  Review and verify your citizen profile details below. You can edit any value before proceeding with the application.
                 </p>
 
-                {/* ─── CASE 1: VIDYA LAKSHMI STUDENT LAYOUT (Bug 3 & 5) ─── */}
+                {/* ─── CASE 1: VIDYA LAKSHMI STUDENT LAYOUT ─── */}
                 {isVidyaLakshmi ? (
                   <div className="vl-step3-container">
                     <div className="vl-step3-header">
-                      <span style={{ fontSize: '2.2rem' }}>🎓</span>
                       <div>
-                        <div className="vl-step3-title">विद्या लक्ष्मी • Vidya Lakshmi — Student Registration Form</div>
+                        <div className="vl-step3-title">Vidya Lakshmi — Student Registration Form</div>
                         <div className="vl-step3-sub">Ministry of Education & NSDL e-Gov • CELAF Student & Loan Portal</div>
                       </div>
                     </div>
@@ -2151,7 +2182,7 @@ const App: React.FC = () => {
                     <div className="gemini-form-grid">
                       <div className="form-item">
                         <label className="item-label">
-                          <span>Student Full Name (छात्र का नाम)</span>
+                          <span>Student Full Name</span>
                           {uncertainFields.includes('full_name') && <span className="uncertain-tag">Review</span>}
                         </label>
                         <input
@@ -2166,7 +2197,7 @@ const App: React.FC = () => {
 
                       <div className="form-item">
                         <label className="item-label">
-                          <span>Email ID (ईमेल आईडी)</span>
+                          <span>Email ID</span>
                           {uncertainFields.includes('email') && <span className="uncertain-tag">Review</span>}
                         </label>
                         <input
@@ -2178,13 +2209,13 @@ const App: React.FC = () => {
                           placeholder="student.name@example.com"
                         />
                         {profile.email && !isEmailValid && (
-                          <div className="field-validation-msg error">⚠️ Must be valid email address</div>
+                          <div className="field-validation-msg error">Must be valid email address</div>
                         )}
                       </div>
 
                       <div className="form-item">
                         <label className="item-label">
-                          <span>Mobile Number (मोबाइल नंबर)</span>
+                          <span>Mobile Number</span>
                           {uncertainFields.includes('mobile_number') && <span className="uncertain-tag">Review</span>}
                         </label>
                         <input
@@ -2196,13 +2227,13 @@ const App: React.FC = () => {
                           placeholder="10-digit mobile number"
                         />
                         {profile.mobile_number && !isMobileValid && (
-                          <div className="field-validation-msg error">⚠️ Must be 10 digits</div>
+                          <div className="field-validation-msg error">Must be 10 digits</div>
                         )}
                       </div>
 
                       <div className="form-item">
                         <label className="item-label">
-                          <span>Date of Birth (जन्म तिथि)</span>
+                          <span>Date of Birth</span>
                           {uncertainFields.includes('date_of_birth') && <span className="uncertain-tag">Review</span>}
                         </label>
                         <input
@@ -2216,7 +2247,7 @@ const App: React.FC = () => {
 
                       <div className="form-item span-two">
                         <label className="item-label">
-                          <span>State of Domicile (मूल निवास राज्य)</span>
+                          <span>State of Domicile</span>
                           {uncertainFields.includes('state') && <span className="uncertain-tag">Review</span>}
                         </label>
                         <input
@@ -2230,124 +2261,8 @@ const App: React.FC = () => {
                       </div>
                     </div>
                   </div>
-                ) : isDynamicPortal ? (
-                  /* ─── CASE 2: ZERO-SHOT DYNAMIC DOM REASONER (Task 3) ─── */
-                  <div>
-                    <div className="dynamic-dom-banner">
-                      <div className="dynamic-dom-info">
-                        <div className="dynamic-dom-title">
-                          <span>⚡ Zero-Shot Dynamic DOM Reasoner</span>
-                          <span className="dynamic-dom-badge">✓ Live Form Blueprint (~400 tokens)</span>
-                        </div>
-                        <div className="dynamic-dom-url">
-                          🏛️ Scanned Portal: {dynamicBlueprint?.title || selectedService?.portal_name || 'Government Portal'} • {dynamicBlueprint?.portal_url || selectedService?.portal_url || ''}
-                        </div>
-                      </div>
-                      <button
-                        type="button"
-                        className="gemini-btn gemini-btn-tonal"
-                        style={{ fontSize: '0.76rem', padding: '0.35rem 0.75rem' }}
-                        onClick={() => scanPortal(selectedService?.portal_url || selectedService?.service_id || '')}
-                        disabled={isScanningDom}
-                      >
-                        {isScanningDom ? 'Rescanning live DOM…' : '🔄 Rescan Portal DOM'}
-                      </button>
-                    </div>
-
-                    {isScanningDom ? (
-                      <div style={{ textAlign: 'center', padding: '2.5rem 1rem', background: 'rgba(255,255,255,0.02)', borderRadius: '8px', border: '1px dashed rgba(56, 189, 248, 0.3)', marginBottom: '1.5rem' }}>
-                        <div className="hunting-spinner" style={{ margin: '0 auto 1rem', width: '28px', height: '28px' }} />
-                        <div style={{ color: '#38bdf8', fontWeight: 600, fontSize: '0.95rem', marginBottom: '0.35rem' }}>
-                          Playwright In-Browser DOM Reader Distilling Live Webpage...
-                        </div>
-                        <div style={{ color: '#94a3b8', fontSize: '0.8rem' }}>
-                          Extracting form fields, selects, and file requirements into compact ~400-token JSON blueprint for LLM.
-                        </div>
-                      </div>
-                    ) : (
-                    <div className="dynamic-dom-grid">
-                      {(dynamicBlueprint?.fields || []).map((field, idx) => {
-                        const sel = field.selector;
-                        const currentVal = dynamicFormValues[sel] !== undefined
-                          ? dynamicFormValues[sel]
-                          : (field.type === 'checkbox' ? false : (field.value || ''));
-
-                        if (field.type === 'checkbox') {
-                          return (
-                            <div key={idx} className="dynamic-field-item checkbox-type span-two">
-                              <input
-                                type="checkbox"
-                                id={`dynamic-${idx}`}
-                                checked={Boolean(currentVal)}
-                                onChange={(e) => setDynamicFormValues(prev => ({ ...prev, [sel]: e.target.checked }))}
-                              />
-                              <label htmlFor={`dynamic-${idx}`} style={{ cursor: 'pointer', fontSize: '0.88rem', color: '#e2e8f0', margin: 0 }}>
-                                {field.label || 'I hereby declare that details are accurate.'}
-                              </label>
-                              <span className="dynamic-field-tag">{sel}</span>
-                            </div>
-                          );
-                        }
-
-                        if (field.tag === 'select' || (field.options && field.options.length > 0)) {
-                          return (
-                            <div key={idx} className="dynamic-field-item">
-                              <label className="dynamic-field-label">
-                                <span>{field.label}</span>
-                                <span className="dynamic-field-tag">{sel}</span>
-                              </label>
-                              <select
-                                className="gemini-input"
-                                value={String(currentVal || 'RAJASTHAN')}
-                                onChange={(e) => setDynamicFormValues(prev => ({ ...prev, [sel]: e.target.value }))}
-                              >
-                                <option value="">-- Select Option --</option>
-                                {(field.options || ['BIHAR', 'GUJARAT', 'RAJASTHAN']).map((opt) => (
-                                  <option key={opt} value={opt}>{opt}</option>
-                                ))}
-                              </select>
-                            </div>
-                          );
-                        }
-
-                        if (field.type === 'file') {
-                          return (
-                            <div key={idx} className="dynamic-field-item span-two">
-                              <label className="dynamic-field-label">
-                                <span>📎 {field.label}</span>
-                                <span className="dynamic-field-tag">{sel}</span>
-                              </label>
-                              <div style={{ background: 'rgba(255,255,255,0.04)', padding: '0.75rem 1rem', borderRadius: '6px', fontSize: '0.82rem', color: '#94a3b8', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                                <span>{file ? `✅ Ready for autonomous upload: ${file.name} (${(file.size/1024).toFixed(0)} KB)` : '📎 Document selected in Step 2'}</span>
-                                <button type="button" className="gemini-btn gemini-btn-tonal" style={{ fontSize: '0.74rem', padding: '0.2rem 0.6rem' }} onClick={() => setCurrentStep(2)}>
-                                  {file ? 'Change File' : 'Select File'}
-                                </button>
-                              </div>
-                            </div>
-                          );
-                        }
-
-                        return (
-                          <div key={idx} className="dynamic-field-item">
-                            <label className="dynamic-field-label">
-                              <span>{field.label}</span>
-                              <span className="dynamic-field-tag">{sel}</span>
-                            </label>
-                            <input
-                              className="gemini-input"
-                              type={field.type || 'text'}
-                              value={String(currentVal || '')}
-                              placeholder={field.label}
-                              onChange={(e) => setDynamicFormValues(prev => ({ ...prev, [sel]: e.target.value }))}
-                            />
-                          </div>
-                        );
-                      })}
-                    </div>
-                    )}
-                  </div>
                 ) : (
-                  /* ─── CASE 3: STANDARD SERVICEPLUS REGISTRATION LAYOUT ─── */
+                  /* ─── CASE 2: UNIVERSAL CITIZEN PROFILE FORM (Always visible for all portals) ─── */
                   <>
                     <div className="gemini-form-grid">
                       {FORM_FIELDS.map((f) => {
@@ -2358,20 +2273,20 @@ const App: React.FC = () => {
                         let validationMsg = null;
                         if (f.key === 'mobile_number') {
                           if (strVal.length > 0 && strVal.length < 10) {
-                            validationMsg = <div className="field-validation-msg error">⚠️ {10 - strVal.length} more digits needed (10-digit mobile)</div>;
+                            validationMsg = <div className="field-validation-msg error">{10 - strVal.length} more digits needed (10-digit mobile)</div>;
                           } else if (strVal.length === 10) {
                             validationMsg = <div className="field-validation-msg success">✓ Valid 10-digit mobile number</div>;
                           }
                         } else if (f.key === 'email') {
                           const isValidEmail = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(strVal.trim());
                           if (strVal.length > 0 && !isValidEmail) {
-                            validationMsg = <div className="field-validation-msg error">⚠️ Must be valid email (e.g. name@gmail.com)</div>;
+                            validationMsg = <div className="field-validation-msg error">Must be valid email (e.g. name@gmail.com)</div>;
                           } else if (isValidEmail) {
                             validationMsg = <div className="field-validation-msg success">✓ Valid email format</div>;
                           }
                         } else if (f.key === 'pincode') {
                           if (strVal.length > 0 && strVal.length < 6) {
-                            validationMsg = <div className="field-validation-msg error">⚠️ {6 - strVal.length} more digits needed (6-digit PIN)</div>;
+                            validationMsg = <div className="field-validation-msg error">{6 - strVal.length} more digits needed (6-digit PIN)</div>;
                           } else if (strVal.length === 6) {
                             validationMsg = <div className="field-validation-msg success">✓ Valid 6-digit PIN code</div>;
                           }
@@ -2414,130 +2329,177 @@ const App: React.FC = () => {
                       })}
                     </div>
 
-                    {/* Bug 7: Citizen Desired Account Password Choice */}
-                    <div className="account-password-section">
-                      <div className="account-password-header">
-                        <div className="account-password-title">
-                          <span>🔐</span>
-                          <span>Desired Portal Account Password</span>
+                    {/* Additional Portal Specific Fields (if genuine form fields were discovered) */}
+                    {genuineDynamicFields.length > 0 && (
+                      <div style={{ marginTop: '1.5rem', borderTop: '1px solid rgba(255, 255, 255, 0.08)', paddingTop: '1.25rem' }}>
+                        <div style={{ fontSize: '0.85rem', fontWeight: 600, color: '#f8fafc', marginBottom: '0.75rem' }}>
+                          Additional Portal Questions
                         </div>
-                        <button
-                          type="button"
-                          className="generate-password-btn"
-                          onClick={() => {
-                            const strong = generateStrongPassword();
-                            setPortalPassword(strong);
-                            showToast('Generated secure password matching official portal rules!', 'info');
-                          }}
-                          title="Generate a secure password meeting all ServicePlus requirements"
-                        >
-                          🎲 Suggest Secure Password
-                        </button>
-                      </div>
-                      <p className="account-password-desc">
-                        Choose the account password for your official portal registration. The AI agent will submit this password to register your citizen profile.
-                      </p>
+                        <div className="dynamic-dom-grid">
+                          {genuineDynamicFields.map((field, idx) => {
+                            const sel = field.selector;
+                            const currentVal = dynamicFormValues[sel] !== undefined
+                              ? dynamicFormValues[sel]
+                              : (field.type === 'checkbox' ? false : (field.value || ''));
 
-                      <div className="sp-password-wrap" style={{ maxWidth: '420px' }}>
-                        <input
-                          type={showPassword ? 'text' : 'password'}
-                          className="gemini-input sp-password-input"
-                          value={portalPassword}
-                          onChange={(e) => setPortalPassword(e.target.value)}
-                          placeholder="Choose account password (e.g. Citizen@2026)"
-                        />
-                        <button
-                          type="button"
-                          className="sp-password-toggle-btn"
-                          onClick={() => setShowPassword(!showPassword)}
-                          title={showPassword ? 'Hide password' : 'Show password'}
-                        >
-                          {showPassword ? '👁️' : '🔒'}
-                        </button>
-                      </div>
+                            if (field.type === 'checkbox') {
+                              return (
+                                <div key={idx} className="dynamic-field-item checkbox-type span-two">
+                                  <input
+                                    type="checkbox"
+                                    id={`dynamic-${idx}`}
+                                    checked={Boolean(currentVal)}
+                                    onChange={(e) => setDynamicFormValues(prev => ({ ...prev, [sel]: e.target.checked }))}
+                                  />
+                                  <label htmlFor={`dynamic-${idx}`} style={{ cursor: 'pointer', fontSize: '0.88rem', color: '#e2e8f0', margin: 0 }}>
+                                    {field.label}
+                                  </label>
+                                </div>
+                              );
+                            }
 
-                      <div className="password-rules-checklist">
-                        <span className={`rule-chip ${portalPassword.length >= 8 ? 'valid' : ''}`}>
-                          {portalPassword.length >= 8 ? '✓' : '•'} 8+ Characters
-                        </span>
-                        <span className={`rule-chip ${/[A-Z]/.test(portalPassword) ? 'valid' : ''}`}>
-                          {/[A-Z]/.test(portalPassword) ? '✓' : '•'} 1 Uppercase Letter
-                        </span>
-                        <span className={`rule-chip ${/[a-z]/.test(portalPassword) ? 'valid' : ''}`}>
-                          {/[a-z]/.test(portalPassword) ? '✓' : '•'} 1 Lowercase Letter
-                        </span>
-                        <span className={`rule-chip ${/\d/.test(portalPassword) ? 'valid' : ''}`}>
-                          {/\d/.test(portalPassword) ? '✓' : '•'} 1 Number
-                        </span>
-                        <span className={`rule-chip ${/[!@#$%^&*]/.test(portalPassword) ? 'valid' : ''}`}>
-                          {/[!@#$%^&*]/.test(portalPassword) ? '✓' : '•'} 1 Special (!@#$%^&*)
-                        </span>
-                      </div>
-                    </div>
+                            if (field.tag === 'select' || (field.options && field.options.length > 0)) {
+                              return (
+                                <div key={idx} className="dynamic-field-item">
+                                  <label className="dynamic-field-label">
+                                    <span>{field.label}</span>
+                                  </label>
+                                  <select
+                                    className="gemini-input"
+                                    value={String(currentVal || '')}
+                                    onChange={(e) => setDynamicFormValues(prev => ({ ...prev, [sel]: e.target.value }))}
+                                  >
+                                    <option value="">-- Select Option --</option>
+                                    {(field.options || []).map((opt) => (
+                                      <option key={opt} value={opt}>{opt}</option>
+                                    ))}
+                                  </select>
+                                </div>
+                              );
+                            }
 
-                    {!isPasswordValid && portalPassword.length > 0 && (
-                      <div className="field-validation-msg error" style={{ marginTop: '0.5rem' }}>
-                        ⚠️ Password does not meet all portal criteria yet. Click &quot;Suggest Secure Password&quot; if you need a quick compliant option.
+                            return (
+                              <div key={idx} className="dynamic-field-item">
+                                <label className="dynamic-field-label">
+                                  <span>{field.label}</span>
+                                </label>
+                                <input
+                                  className="gemini-input"
+                                  type={field.type || 'text'}
+                                  value={String(currentVal || '')}
+                                  placeholder={field.label}
+                                  onChange={(e) => setDynamicFormValues(prev => ({ ...prev, [sel]: e.target.value }))}
+                                />
+                              </div>
+                            );
+                          })}
+                        </div>
                       </div>
                     )}
 
-                    {!isFormComplete && (
-                      <div className="incomplete-fields-callout">
-                        <div className="incomplete-title">
-                          <span>⚠️ Complete all required fields to check eligibility ({missingFields.length} remaining):</span>
+                    {/* Portal Password Section for ServicePlus registration */}
+                    {(!isDynamicPortal || selectedService?.service_id === '1784' || selectedService?.service_id === 'citizen_registration') && (
+                      <div className="account-password-section">
+                        <div className="account-password-header">
+                          <div className="account-password-title">
+                            <span>Desired Portal Account Password</span>
+                          </div>
+                          <button
+                            type="button"
+                            className="generate-password-btn"
+                            onClick={() => {
+                              const strong = generateStrongPassword();
+                              setPortalPassword(strong);
+                              showToast('Generated secure password matching official portal rules!', 'info');
+                            }}
+                            title="Generate a secure password meeting portal requirements"
+                          >
+                            Suggest Secure Password
+                          </button>
                         </div>
-                        <div className="missing-pills-row">
-                          {missingFields.map((f) => (
-                            <span key={f.key as string} className="missing-field-pill">
-                              {f.label.split(' (')[0]}
-                            </span>
-                          ))}
+                        <p className="account-password-desc">
+                          Choose the account password for your official portal registration. The AI agent will submit this password to register your citizen profile.
+                        </p>
+
+                        <div className="sp-password-wrap" style={{ maxWidth: '420px' }}>
+                          <input
+                            type={showPassword ? 'text' : 'password'}
+                            className="gemini-input sp-password-input"
+                            value={portalPassword}
+                            onChange={(e) => setPortalPassword(e.target.value)}
+                            placeholder="Choose account password (e.g. Citizen@2026)"
+                          />
+                          <button
+                            type="button"
+                            className="sp-password-toggle-btn"
+                            onClick={() => setShowPassword(!showPassword)}
+                            title={showPassword ? 'Hide password' : 'Show password'}
+                          >
+                            {showPassword ? 'Hide' : 'Show'}
+                          </button>
+                        </div>
+
+                        <div className="password-rules-checklist">
+                          <span className={`rule-chip ${portalPassword.length >= 8 ? 'valid' : ''}`}>
+                            {portalPassword.length >= 8 ? '✓' : '•'} 8+ Characters
+                          </span>
+                          <span className={`rule-chip ${/[A-Z]/.test(portalPassword) ? 'valid' : ''}`}>
+                            {/[A-Z]/.test(portalPassword) ? '✓' : '•'} 1 Uppercase Letter
+                          </span>
+                          <span className={`rule-chip ${/[a-z]/.test(portalPassword) ? 'valid' : ''}`}>
+                            {/[a-z]/.test(portalPassword) ? '✓' : '•'} 1 Lowercase Letter
+                          </span>
+                          <span className={`rule-chip ${/\d/.test(portalPassword) ? 'valid' : ''}`}>
+                            {/\d/.test(portalPassword) ? '✓' : '•'} 1 Number
+                          </span>
+                          <span className={`rule-chip ${/[!@#$%^&*]/.test(portalPassword) ? 'valid' : ''}`}>
+                            {/[!@#$%^&*]/.test(portalPassword) ? '✓' : '•'} 1 Special (!@#$%^&*)
+                          </span>
                         </div>
                       </div>
                     )}
                   </>
                 )}
 
-                {/* Mandatory Citizen Gatekeeper Checkbox */}
-                <div className="verification-gate" onClick={() => setVerified(!verified)}>
-                  <input
-                    type="checkbox"
-                    id="citizen-verified"
-                    checked={verified}
-                    onChange={(e) => setVerified(e.target.checked)}
-                    onClick={(e) => e.stopPropagation()}
-                  />
+                {/* Mandatory Citizen Confirmation Checkbox with High-Contrast Box */}
+                <div className={`verification-gate ${verified ? 'is-verified' : ''}`} onClick={() => setVerified(!verified)}>
+                  <div className="custom-check-box">
+                    {verified && <span className="custom-check-tick">✓</span>}
+                  </div>
                   <div>
                     <div className="gate-label">I confirm and verify the accuracy of this data</div>
-                    <div className="gate-sub">The browser agent will fill the official portal using these details.</div>
+                    <div className="gate-sub">The browser agent will fill the official portal using these verified details.</div>
                   </div>
                 </div>
 
                 <div className="action-buttons-row">
                   <button className="gemini-btn gemini-btn-tonal" onClick={() => setCurrentStep(2)}>
-                    Back
+                    ← Back
                   </button>
                   <button
-                    className="gemini-btn gemini-btn-tonal"
+                    className="gemini-btn gemini-btn-primary"
                     disabled={!verified || !isFormComplete || loading}
                     onClick={handleCheckEligibility}
                     title={
                       !isFormComplete
-                        ? `Please complete remaining ${missingFields.length} field(s)`
+                        ? 'Please verify that Full Name, 10-digit Mobile, and State are filled'
                         : !verified
                         ? 'Please tick the confirmation checkbox'
-                        : 'Check Scheme Eligibility'
+                        : 'Verify & Proceed to Registration'
                     }
                   >
-                    {loading ? 'Evaluating…' : 'Check Scheme Eligibility'}
+                    {loading ? 'Evaluating…' : 'Verify & Proceed to Registration →'}
                   </button>
                   {eligibility && (
                     <button
                       className="gemini-btn gemini-btn-active-blue"
                       disabled={!verified || loading}
-                      onClick={handleStartAgent}
+                      onClick={() => {
+                        handleStartAgent();
+                        setCurrentStep(4);
+                      }}
                     >
-                      Launch AI Browser Agent
+                      Launch AI Browser Agent →
                     </button>
                   )}
                 </div>

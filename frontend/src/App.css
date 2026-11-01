@@ -1694,34 +1694,64 @@ select.gemini-input option {
 .verification-gate {
   display: flex;
   align-items: flex-start;
-  gap: 0.75rem;
-  background: rgba(168, 199, 250, 0.05);
-  border: 1px solid rgba(168, 199, 250, 0.2);
+  gap: 0.85rem;
+  background: rgba(56, 189, 248, 0.05);
+  border: 1px solid rgba(56, 189, 248, 0.2);
   border-radius: 12px;
-  padding: 1rem;
+  padding: 1rem 1.15rem;
   margin-top: 1.5rem;
   cursor: pointer;
+  transition: all 0.2s ease;
 }
 
-.verification-gate input[type="checkbox"] {
-  width: 18px;
-  height: 18px;
-  accent-color: var(--gemini-blue);
+.verification-gate:hover {
+  background: rgba(56, 189, 248, 0.08);
+  border-color: rgba(56, 189, 248, 0.35);
+}
+
+.verification-gate.is-verified {
+  background: rgba(2, 132, 199, 0.12);
+  border-color: rgba(56, 189, 248, 0.5);
+}
+
+.custom-check-box {
+  width: 22px;
+  height: 22px;
+  min-width: 22px;
+  border-radius: 6px;
+  border: 2px solid rgba(148, 163, 184, 0.6);
+  background: rgba(15, 23, 42, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
   margin-top: 2px;
-  cursor: pointer;
+  transition: all 0.18s ease;
+}
+
+.verification-gate.is-verified .custom-check-box {
+  background: #0284c7;
+  border-color: #38bdf8;
+  box-shadow: 0 0 10px rgba(56, 189, 248, 0.45);
+}
+
+.custom-check-tick {
+  color: #ffffff;
+  font-size: 15px;
+  font-weight: 900;
+  line-height: 1;
 }
 
 .gate-label {
-  font-size: 0.9rem;
-  font-weight: 500;
+  font-size: 0.92rem;
+  font-weight: 600;
   color: var(--gemini-text);
   cursor: pointer;
 }
 
 .gate-sub {
-  font-size: 0.78rem;
+  font-size: 0.8rem;
   color: var(--gemini-text-muted);
-  margin-top: 0.15rem;
+  margin-top: 0.2rem;
 }
 
 /* Eligibility Result Card */

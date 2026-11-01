@@ -521,9 +521,37 @@ def check_eligibility(
     """
     normalized_id = _SERVICE_ALIASES.get(service_id.lower().strip(), service_id.strip())
     if normalized_id not in SERVICE_RULES:
-        raise ValueError(
-            f"Unknown service_id: '{service_id}'. "
-            f"Supported: {list(SERVICE_RULES.keys())}"
+        # Universal validation for general citizen registrations (e.g., DigiLocker, unmapped portals)
+        svc_name = service_id.replace("_", " ").replace("-", " ").title()
+        has_name = bool(profile.full_name and len(profile.full_name.strip()) >= 2)
+        clean_mobile = re.sub(r'\D', '', profile.mobile_number or "")
+        has_mobile = len(clean_mobile) == 10
+
+        results = [
+            RuleResult(
+                rule_id="name_verified",
+                passed=has_name,
+                explanation="Citizen full name verified." if has_name else "Citizen full name is required for registration.",
+            ),
+            RuleResult(
+                rule_id="mobile_verified",
+                passed=has_mobile,
+                explanation="Valid 10-digit mobile number provided for portal communication." if has_mobile else "Valid 10-digit mobile number is required.",
+            ),
+        ]
+
+        all_passed = has_name and has_mobile
+        summary = (
+            f"Citizen profile verified for '{svc_name}'. General application requirements satisfied."
+            if all_passed
+            else f"Please complete your profile details to proceed with '{svc_name}'."
+        )
+
+        return EligibilityResponse(
+            eligible=all_passed,
+            service_name=svc_name,
+            results=results,
+            summary=summary,
         )
 
     service_cfg = SERVICE_RULES[normalized_id]
