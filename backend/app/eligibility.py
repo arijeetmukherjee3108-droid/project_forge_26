@@ -602,52 +602,150 @@ _INTENT_KEYWORD_MAP: dict[str, dict] = {
     },
     "citizen_registration": {
         "keywords": [
-            "register", "registration", "signup", "sign up", "account", "login",
             "serviceplus", "service online", "create account", "new user",
+            "citizen account", "signup portal", "sign up account",
         ],
         "default_docs": ["aadhaar"],
         "description": "Matched general ServicePlus citizen self-registration intent.",
     },
 }
 
+_VALID_SERVICE_IDS = frozenset(SERVICE_RULES.keys())
 
 # ---------------------------------------------------------------------------
 # Dynamic AI Intent Navigation — LLM-First Zero-Shot Scheme Reasoning
 # ---------------------------------------------------------------------------
 
-_LLM_INTENT_SYSTEM_PROMPT = """You are an expert AI Indian GovTech Navigator and Scheme Routing Engine.
+_LLM_INTENT_SYSTEM_PROMPT = """You are an expert AI Indian GovTech Navigator and Scheme Advisor.
 Given any citizen prompt, conversational query, or target scheme/portal description in English, Hindi, or Hinglish:
-1. Identify the exact government scheme, department, state/national service, or portal the citizen wants to apply for or access across India.
-2. If the user mentions a specific state (e.g. Rajasthan, Maharashtra, UP, Bihar, Delhi, Karnataka, MP, etc.), route directly to that state's official service/portal.
-3. Determine:
-   - `matched_service_id`: clean short slug identifier (e.g. "pm_kisan", "vidyalakshmi", "1784", "raj_msme", "up_scholarship", "maha_domicile")
+1. Answer the citizen's query conversationally and informatively. Explain the scheme, eligibility requirements, documents needed, and application process.
+2. Identify the exact government scheme, department, state/national service, or portal the citizen wants to apply for or access across India.
+3. If the user mentions a specific state (e.g. Rajasthan, Maharashtra, UP, Bihar, Delhi, Karnataka, MP, etc.), route directly to that state's official service/portal.
+4. If the citizen is asking about exams/admissions (e.g. JEE Main, NEET, CUET, UPSC), scholarships (Vidya Lakshmi, NSP), welfare (PM-KISAN, Ration Card, E-Shram, ServicePlus 1784), or certificates (Income, Domicile, Caste), accurately identify the official portal and requirements.
+5. Determine:
+   - `matched_service_id`: clean short slug identifier (e.g. "pm_kisan", "vidyalakshmi", "1784", "jee_main", "up_income_cert", "maha_domicile")
    - `service_name`: full official name of the scheme/service
    - `portal_name`: official name of the portal/department
    - `portal_url`: official web address of the scheme/portal
    - `category`: "welfare" | "education" | "agriculture" | "health" | "general"
-   - `confidence`: float between 0.0 and 1.0
-   - `explanation`: clear reasoning for the match
+   - `confidence`: float between 0.0 and 1.0 (clamped)
+   - `explanation`: concise one-line reason for the match
+   - `ai_advice`: friendly, detailed conversational advice for the citizen explaining eligibility, criteria, and next steps
    - `suggested_documents`: array of required documents (e.g. ["income_certificate", "aadhaar", "marksheet", "land_record"])
+   - `can_automate`: boolean (true if automated form filling can be initiated)
+   - `cta_message`: action button label (e.g. "Launch AI Form Agent", "Route to Document Hub")
 
-You must respond STRICTLY with a valid JSON object matching this schema:
+Respond STRICTLY with a valid JSON object matching this schema:
 {
   "matched_service_id": "service_slug",
   "service_name": "Full Official Name of Scheme / Service",
   "portal_name": "Official Department / Portal Name",
   "portal_url": "https://portal.gov.in/service_path",
-  "category": "welfare",
+  "category": "education",
   "confidence": 0.95,
   "explanation": "Clear justification of how citizen query maps to this official portal.",
-  "suggested_documents": ["income_certificate", "aadhaar"]
+  "ai_advice": "Detailed conversational response explaining the scheme, eligibility, requirements, and next steps.",
+  "suggested_documents": ["marksheet", "aadhaar", "income_certificate"],
+  "can_automate": true,
+  "cta_message": "Launch AI Form Agent"
 }
 """
 
 
+def _llm_classify_intent(raw_query: str) -> "IntentClassifyResponse | None":
+    """
+    Call Groq LLM and return an IntentClassifyResponse, or None if the
+    LLM is unavailable, returns invalid data, or times out.
+    Imports llm_client lazily so missing groq never breaks tests.
+    """
+    raw_query = (raw_query or "").strip()
+    if not raw_query:
+        return None
+
+    try:
+        try:
+            from app.llm_client import chat_json  # type: ignore
+        except ImportError:
+            from backend.app.llm_client import chat_json  # type: ignore
+
+        raw_data = chat_json(
+            system_prompt=_LLM_INTENT_SYSTEM_PROMPT,
+            user_content=raw_query,
+        )
+        if not isinstance(raw_data, dict) or not raw_data:
+            return None
+
+        raw_sid = str(raw_data.get("matched_service_id") or "").strip()
+        if not raw_sid:
+            return None
+
+        raw_conf = raw_data.get("confidence", 0.95)
+        try:
+            conf = float(raw_conf)
+        except (TypeError, ValueError):
+            conf = 0.92
+        conf = max(0.0, min(1.0, conf))
+
+        expl = str(raw_data.get("explanation") or f"AI matched intent to {raw_sid}.")
+        raw_docs = raw_data.get("suggested_documents")
+        docs = [str(d) for d in raw_docs] if isinstance(raw_docs, list) and raw_docs else ["income_certificate", "aadhaar"]
+        advice = raw_data.get("ai_advice") or expl
+        can_auto = bool(raw_data.get("can_automate", True))
+        cta = str(raw_data.get("cta_message") or "Launch Autonomous Form Agent")
+
+        # 1. Known service from SERVICE_RULES
+        if raw_sid in _VALID_SERVICE_IDS:
+            svc_cfg = SERVICE_RULES[raw_sid]
+            return IntentClassifyResponse(
+                matched_service_id=raw_sid,
+                service_name=svc_cfg["name"],
+                portal_name=str(raw_data.get("portal_name") or svc_cfg["name"]),
+                portal_url=str(raw_data.get("portal_url") or "https://serviceonline.gov.in/citizenRegistration.html"),
+                category=str(raw_data.get("category") or "welfare"),
+                confidence=conf,
+                explanation=expl,
+                suggested_documents=docs,
+                ai_advice=advice,
+                can_automate=can_auto,
+                cta_message=cta,
+            )
+
+        # 2. Dynamic zero-shot scheme discovered by LLM with valid metadata
+        service_name = raw_data.get("service_name")
+        portal_url = raw_data.get("portal_url")
+        if service_name and (portal_url or raw_data.get("portal_name")):
+            return IntentClassifyResponse(
+                matched_service_id=raw_sid,
+                service_name=str(service_name),
+                portal_name=str(raw_data.get("portal_name") or service_name),
+                portal_url=str(portal_url or "https://india.gov.in"),
+                category=str(raw_data.get("category") or "general"),
+                confidence=conf,
+                explanation=expl,
+                suggested_documents=docs,
+                ai_advice=advice,
+                can_automate=can_auto,
+                cta_message=cta,
+            )
+
+        # 3. If invalid/unknown service ID with no portal metadata, reject (e.g. test_llm_invalid_service_id_falls_back)
+        return None
+
+    except Exception as exc:
+        import logging as _log
+        _log.getLogger(__name__).warning("LLM intent call failed: %s", exc)
+        return None
+
+
 def classify_citizen_intent(text: str) -> IntentClassifyResponse:
     """
-    Classify the citizen's prompt/voice transcript using the Groq LLM directly.
-    Zero-shot semantic understanding with dynamic portal routing.
+    Classify the citizen's prompt/voice transcript using keyword-matching + LLM reasoning.
+    1. Direct exact keyword fast-path for known schemes (zero network latency).
+    2. Fallback to Groq LLM for ambiguous, Hinglish, Devanagari, or external scheme queries.
+    3. Safe deterministic default if LLM is unreachable.
     """
+    import re
+
     raw = (text or "").strip()
     if not raw:
         return IntentClassifyResponse(
@@ -659,77 +757,69 @@ def classify_citizen_intent(text: str) -> IntentClassifyResponse:
             confidence=0.5,
             explanation="No query provided; defaulted to ServicePlus.",
             suggested_documents=["income_certificate", "aadhaar"],
+            ai_advice="Welcome to Voice-to-Legacy! Please ask any question about government schemes, scholarships, farmer support, or citizen certificates.",
+            can_automate=True,
+            cta_message="Launch Autonomous Form Agent",
         )
 
-    # 1. ALWAYS CALL THE LLM FIRST (Direct AI Intent Reasoning)
-    try:
-        try:
-            from app.llm_client import chat_json  # type: ignore
-        except ImportError:
-            from backend.app.llm_client import chat_json  # type: ignore
-
-        llm_data = chat_json(
-            system_prompt=_LLM_INTENT_SYSTEM_PROMPT,
-            user_content=f"Citizen query: {raw}",
-        )
-
-        if isinstance(llm_data, dict) and llm_data.get("matched_service_id"):
-            sid = str(llm_data.get("matched_service_id", "1784")).strip()
-            s_name = str(llm_data.get("service_name") or sid)
-            p_name = str(llm_data.get("portal_name") or s_name)
-            p_url = str(llm_data.get("portal_url") or "")
-            cat = str(llm_data.get("category") or "welfare")
-            try:
-                conf = float(llm_data.get("confidence", 0.95))
-            except (TypeError, ValueError):
-                conf = 0.92
-            expl = str(llm_data.get("explanation") or f"AI matched citizen intent to {s_name}.")
-            docs = llm_data.get("suggested_documents")
-            if not isinstance(docs, list) or not docs:
-                docs = ["income_certificate", "aadhaar"]
-
-            return IntentClassifyResponse(
-                matched_service_id=sid,
-                service_name=s_name,
-                portal_name=p_name,
-                portal_url=p_url,
-                category=cat,
-                confidence=conf,
-                explanation=expl,
-                suggested_documents=[str(d) for d in docs],
-            )
-    except Exception as exc:
-        import logging as _log
-        _log.getLogger(__name__).warning("LLM intent call failed, falling back to heuristics: %s", exc)
-
-    # 2. Heuristic fallback ONLY if LLM is unreachable
-    best_service_id = "1784"
-    best_score = 0
-    matched_reason = "General citizen application"
     raw_lower = raw.lower()
+
+    # 1. Check keyword fast-path with word boundaries
+    best_service_id = None
+    best_score = 0
+    matched_reason = ""
 
     for svc_id, data in _INTENT_KEYWORD_MAP.items():
         score = 0
         for kw in data["keywords"]:
-            if " " in kw and kw in raw_lower:
-                score += 3
-            elif kw in raw_lower.split() or kw in raw_lower:
-                score += 1
+            if " " in kw:
+                if kw in raw_lower:
+                    score += 3
+            else:
+                # Word boundary match to prevent "ration" matching inside "registration"
+                if re.search(r'\b' + re.escape(kw) + r'\b', raw_lower):
+                    score += 2
         if score > best_score:
             best_score = score
             best_service_id = svc_id
             matched_reason = data["description"]
 
-    svc_cfg = SERVICE_RULES.get(best_service_id, SERVICE_RULES["1784"])
-    suggested_docs = _INTENT_KEYWORD_MAP.get(best_service_id, {}).get("default_docs", ["aadhaar"])
+    # If we have a strong keyword match, return directly without LLM latency
+    if best_service_id and best_score >= 2:
+        svc_cfg = SERVICE_RULES.get(best_service_id, SERVICE_RULES["1784"])
+        suggested_docs = _INTENT_KEYWORD_MAP.get(best_service_id, {}).get("default_docs", ["aadhaar"])
+        conf = 0.95 if best_score >= 3 else 0.85
+        return IntentClassifyResponse(
+            matched_service_id=best_service_id,
+            service_name=svc_cfg["name"],
+            portal_name=svc_cfg.get("portal_name", "National Portal"),
+            portal_url=svc_cfg.get("portal_url", "https://serviceonline.gov.in/citizenRegistration.html"),
+            category=svc_cfg.get("category", "general"),
+            confidence=conf,
+            explanation=matched_reason,
+            suggested_documents=suggested_docs,
+            ai_advice=f"Found matching official service: {svc_cfg['name']}. You can review the requirements and launch the autonomous agent to complete your application.",
+            can_automate=True,
+            cta_message=f"Apply for {svc_cfg['name']}",
+        )
 
+    # 2. No strong keyword match → Call Groq LLM for semantic understanding
+    llm_result = _llm_classify_intent(raw)
+    if llm_result is not None:
+        return llm_result
+
+    # 3. Deterministic fallback ONLY if LLM is unreachable or invalid
+    svc_cfg = SERVICE_RULES["1784"]
     return IntentClassifyResponse(
-        matched_service_id=best_service_id,
+        matched_service_id="1784",
         service_name=svc_cfg["name"],
         portal_name="National Portal",
         portal_url="https://serviceonline.gov.in/citizenRegistration.html",
         category="general",
-        confidence=0.75,
-        explanation=matched_reason,
-        suggested_documents=suggested_docs,
+        confidence=0.60,
+        explanation="Query did not strongly match a specific scheme; defaulted to ServicePlus 1784.",
+        suggested_documents=["income_certificate", "aadhaar"],
+        ai_advice="We could not definitively match your query to a single scheme. You can explore standard citizen registration on ServicePlus or search again.",
+        can_automate=True,
+        cta_message="Open Citizen Registration",
     )

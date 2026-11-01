@@ -57,6 +57,9 @@ export interface IntentClassificationResponse {
   required_documents: string[];    // Target documents to fetch or upload
   confidence: number;              // 0.0 to 1.0
   description: string;
+  ai_advice?: string;
+  can_automate?: boolean;
+  cta_message?: string;
 }
 
 /**

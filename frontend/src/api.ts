@@ -25,6 +25,12 @@ export interface BackendIntentClassifyResponse {
   confidence: number;
   explanation: string;
   suggested_documents?: string[];
+  portal_name?: string;
+  portal_url?: string;
+  category?: string;
+  ai_advice?: string;
+  can_automate?: boolean;
+  cta_message?: string;
 }
 
 /**
@@ -170,6 +176,9 @@ export const classifyIntent = async (query: string): Promise<IntentClassificatio
         required_documents: b.suggested_documents?.length ? b.suggested_documents : (match?.required_documents || ['income_certificate', 'aadhaar']),
         confidence: b.confidence ?? 0.95,
         description: b.explanation || match?.description || 'AI classified citizen intent.',
+        ai_advice: b.ai_advice || b.explanation || match?.description,
+        can_automate: b.can_automate ?? true,
+        cta_message: b.cta_message || `Apply for ${b.service_name || 'Scheme'}`,
       };
     }
   } catch (err) {

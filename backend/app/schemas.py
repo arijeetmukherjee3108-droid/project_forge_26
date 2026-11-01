@@ -588,6 +588,18 @@ class IntentClassifyResponse(BaseModel):
         default="welfare",
         description="Scheme category: welfare, education, agriculture, health, or general.",
     )
+    ai_advice: Optional[str] = Field(
+        default=None,
+        description="Conversational guidance, eligibility summary, and instructions for the citizen.",
+    )
+    can_automate: bool = Field(
+        default=True,
+        description="Whether our autonomous browser agent can assist or auto-fill this application.",
+    )
+    cta_message: Optional[str] = Field(
+        default="Launch Autonomous Form Agent",
+        description="Suggested action button label to route the user into the application pipeline.",
+    )
 
 
 

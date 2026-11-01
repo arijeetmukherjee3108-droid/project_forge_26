@@ -247,8 +247,8 @@ const MOCK_AGENT_STEPS: { action: string; field: MockPortalField }[] = [
   { action: '🔒 [PAUSE] Captcha detected. Cropped and waiting for citizen approval.', field: { label: '', value: '', type: 'text' } },
 ];
 
-// ── Bug 6: Domain Categorized Suggestions & Dynamic Prompt Pills ───────────────
-export type DomainCategory = 'all' | 'education' | 'welfare' | 'certificates' | 'agriculture' | 'health';
+// ── Bug 6 & Phase 2: Domain Categorized Suggestions & Conversational Chat ──
+export type DomainCategory = 'education' | 'agriculture' | 'welfare' | 'certificates' | 'health';
 
 export interface DomainMeta {
   id: DomainCategory;
@@ -257,11 +257,10 @@ export interface DomainMeta {
 }
 
 export const DOMAIN_CATEGORIES: DomainMeta[] = [
-  { id: 'all', label: 'All Schemes', icon: '🌟' },
   { id: 'education', label: 'Education / Scholarships', icon: '🎓' },
+  { id: 'agriculture', label: 'Agriculture / Farmers', icon: '🌾' },
   { id: 'welfare', label: 'Welfare / Pensions', icon: '🏛️' },
   { id: 'certificates', label: 'Certificates & Domicile', icon: '📜' },
-  { id: 'agriculture', label: 'Agriculture / Farmers', icon: '🌾' },
   { id: 'health', label: 'Healthcare', icon: '🏥' },
 ];
 
@@ -270,6 +269,17 @@ export interface DomainSuggestionItem {
   text: string;
   domain: 'education' | 'welfare' | 'certificates' | 'agriculture' | 'health';
   domainLabel: string;
+  badge?: string;
+  subtitle?: string;
+}
+
+export interface ChatMessage {
+  id: string;
+  sender: 'user' | 'assistant';
+  text: string;
+  timestamp: string;
+  schemeMatch?: IntentClassificationResponse;
+  canRoute?: boolean;
 }
 
 export const DOMAIN_SUGGESTIONS: Record<'apply' | 'eligibility', DomainSuggestionItem[]> = {
@@ -451,7 +461,8 @@ const App: React.FC = () => {
   // Step 1: Intent
   const [intent, setIntent] = useState('');
   const [isListening, setIsListening] = useState(false);
-  const [selectedDomain, setSelectedDomain] = useState<DomainCategory>('all');
+  const [selectedDomain, setSelectedDomain] = useState<DomainCategory>('education');
+  const [advisorChat, setAdvisorChat] = useState<ChatMessage[]>([]);
   const [promptIndex, setPromptIndex] = useState(0);
   const [fadeState, setFadeState] = useState(true);
   const [selectedService, setSelectedService] = useState<IntentClassificationResponse | null>(null);
@@ -490,9 +501,6 @@ const App: React.FC = () => {
   // Filtered prompts for rotating capsule placeholder
   const activePrompts = useMemo(() => {
     const list = DOMAIN_SUGGESTIONS[activeMode] || [];
-    if (selectedDomain === 'all') {
-      return list.map((item) => item.text);
-    }
     const filtered = list.filter((item) => item.domain === selectedDomain);
     return filtered.length > 0 ? filtered.map((item) => item.text) : list.map((item) => item.text);
   }, [activeMode, selectedDomain]);
@@ -658,15 +666,62 @@ const App: React.FC = () => {
     }
   };
 
+  const handleProceedToApplication = async (scheme?: IntentClassificationResponse | null) => {
+    const target = scheme || selectedService;
+    if (!target) {
+      showToast('Please select or describe a scheme first.', 'error');
+      return;
+    }
+
+    setSelectedService(target);
+    setProfile((prev) => ({
+      ...prev,
+      target_intent: target.service_name,
+      target_service_id: target.service_id,
+      target_service_name: target.service_name,
+      target_portal_id: target.portal_id,
+      target_portal_name: target.portal_name,
+      target_portal_url: target.portal_url,
+      required_documents_list: target.required_documents,
+    }));
+
+    const isKnownFastPath = target.service_id === '1784' || target.service_id === 'vidyalakshmi' || target.service_id === 'citizen_registration';
+    if (!isKnownFastPath && (target.portal_url || target.service_id)) {
+      showToast(`AI analyzing live portal DOM for ${target.service_name}...`, 'info');
+      await scanPortal(target.portal_url || target.service_id);
+    }
+
+    showToast(`Routing to Document Hub for: ${target.service_name}`, 'success');
+    setCurrentStep(2);
+  };
+
   const handleIntentSubmit = async (textToUse?: string) => {
-    const query = textToUse || intent;
-    if (!query.trim()) {
+    const query = (textToUse || intent).trim();
+    if (!query) {
       showToast('Please type or speak what service you need.', 'error');
       return;
     }
+
+    // Check if citizen is explicitly saying "route me", "apply", etc.
+    const isRouteCommand = /(route|apply|proceed|launch|fill form|start application|continue|take me|next page|haan apply|bharo)/i.test(query);
+    if (isRouteCommand && selectedService) {
+      handleProceedToApplication(selectedService);
+      return;
+    }
+
+    // 1. Add citizen message to chat stream
+    const userMsg: ChatMessage = {
+      id: `user-${Date.now()}`,
+      sender: 'user',
+      text: query,
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    };
+    setAdvisorChat((prev) => [...prev, userMsg]);
+    setIntent('');
     setIsClassifying(true);
+
     try {
-      // 1. Send query directly to Groq LLM for zero-shot intent reasoning
+      // 2. Query AI GovTech Advisor for zero-shot intent reasoning & conversational guidance
       const match = await classifyIntent(query);
       setSelectedService(match);
       setProfile((prev) => ({
@@ -680,18 +735,28 @@ const App: React.FC = () => {
         required_documents_list: match.required_documents,
       }));
 
-      // 2. If it's an unmapped portal form (not fast-path), scan the DOM live!
-      const isKnownFastPath = match.service_id === '1784' || match.service_id === 'vidyalakshmi' || match.service_id === 'citizen_registration';
-      if (!isKnownFastPath && (match.portal_url || match.service_id)) {
-        showToast(`AI analyzing live portal DOM for ${match.service_name}...`, 'info');
-        await scanPortal(match.portal_url || match.service_id);
-      }
-
-      showToast(`AI routed to: ${match.service_name}`, 'success');
-      setCurrentStep(2);
+      // 3. Add AI advisor response
+      const adviceContent = match.ai_advice || match.description || `Here are the official guidelines for ${match.service_name}.`;
+      const assistantMsg: ChatMessage = {
+        id: `assist-${Date.now()}`,
+        sender: 'assistant',
+        text: adviceContent,
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        schemeMatch: match,
+        canRoute: match.can_automate ?? true,
+      };
+      setAdvisorChat((prev) => [...prev, assistantMsg]);
     } catch {
       showToast('Analyzing intent with fallback catalog.', 'info');
-      setCurrentStep(2);
+      const fallbackMsg: ChatMessage = {
+        id: `assist-${Date.now()}`,
+        sender: 'assistant',
+        text: 'I found matching services in our verified government catalog. You can proceed directly to the application pipeline.',
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        schemeMatch: selectedService || undefined,
+        canRoute: true,
+      };
+      setAdvisorChat((prev) => [...prev, fallbackMsg]);
     } finally {
       setIsClassifying(false);
     }
@@ -711,12 +776,16 @@ const App: React.FC = () => {
       target_portal_url: scheme.portal_url,
       required_documents_list: scheme.required_documents,
     }));
-    const isKnownFastPath = scheme.service_id === '1784' || scheme.service_id === 'vidyalakshmi' || scheme.service_id === 'citizen_registration';
-    if (!isKnownFastPath && (scheme.portal_url || scheme.service_id)) {
-      scanPortal(scheme.portal_url || scheme.service_id);
-    }
+    const switchMsg: ChatMessage = {
+      id: `assist-${Date.now()}`,
+      sender: 'assistant',
+      text: `Switched target scheme to **${scheme.service_name}**. When you're ready, click below to launch the autonomous agent!`,
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      schemeMatch: scheme,
+      canRoute: true,
+    };
+    setAdvisorChat((prev) => [...prev, switchMsg]);
     showToast(`Switched scheme to ${scheme.service_name}`, 'info');
-    setCurrentStep(2);
   };
 
   // File Upload Handlers
@@ -1346,210 +1415,312 @@ const App: React.FC = () => {
 
         <div className={`gemini-container ${currentStep === 4 ? 'wide' : ''}`}>
           {/* ════════════════════════════════════════
-              STEP 1: GEMINI HERO / PROMPT VIEW
+              STEP 1: GEMINI HERO / PROMPT VIEW / AI ADVISOR CHAT
           ════════════════════════════════════════ */}
           {currentStep === 1 && (
-            <div className="gemini-hero">
-              <h1 className="hero-heading">Where should we start?</h1>
+            <>
+              {advisorChat.length === 0 ? (
+                <div className="gemini-hero">
+                  <h1 className="hero-heading">Where should we start?</h1>
+                  <p style={{ color: '#94a3b8', fontSize: '0.92rem', marginTop: '-0.5rem', marginBottom: '1.25rem', maxWidth: '640px' }}>
+                    Ask our AI GovTech Advisor any question about government schemes, eligibility rules, or launch automated portal applications.
+                  </p>
 
-              {/* Pill Prompt Capsule */}
-              <div className="gemini-search-capsule">
-                <div className="capsule-input-container">
-                  <input
-                    className="capsule-input"
-                    type="text"
-                    value={intent}
-                    onChange={(e) => setIntent(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && handleIntentSubmit()}
-                  />
-                  {!intent && (
-                    <div className={`capsule-animated-placeholder ${fadeState ? 'fade-in' : 'fade-out'}`}>
-                      {activePrompts[promptIndex % (activePrompts.length || 1)]}
+                  {/* Pill Prompt Capsule */}
+                  <div className="gemini-search-capsule">
+                    <div className="capsule-input-container">
+                      <input
+                        className="capsule-input"
+                        type="text"
+                        value={intent}
+                        onChange={(e) => setIntent(e.target.value)}
+                        onKeyDown={(e) => e.key === 'Enter' && handleIntentSubmit()}
+                      />
+                      {!intent && (
+                        <div className={`capsule-animated-placeholder ${fadeState ? 'fade-in' : 'fade-out'}`}>
+                          {activePrompts[promptIndex % (activePrompts.length || 1)]}
+                        </div>
+                      )}
                     </div>
-                  )}
-                </div>
 
-                <div className="capsule-actions">
-                  <button
-                    className={`capsule-icon-btn ${isListening ? 'recording' : ''}`}
-                    onClick={handleToggleVoice}
-                    title="Speak using Web Speech API"
-                  >
-                    <Icons.Mic />
-                  </button>
+                    <div className="capsule-actions">
+                      <button
+                        className={`capsule-icon-btn ${isListening ? 'recording' : ''}`}
+                        onClick={handleToggleVoice}
+                        title="Speak using Web Speech API"
+                      >
+                        <Icons.Mic />
+                      </button>
 
-                  <button
-                    className="capsule-submit-btn"
-                    disabled={!intent.trim()}
-                    onClick={() => handleIntentSubmit()}
-                    title="Send"
-                  >
-                    <Icons.ArrowUp />
-                  </button>
-                </div>
-              </div>
+                      <button
+                        className="capsule-submit-btn"
+                        disabled={!intent.trim()}
+                        onClick={() => handleIntentSubmit()}
+                        title="Send"
+                      >
+                        <Icons.ArrowUp />
+                      </button>
+                    </div>
+                  </div>
 
-              {/* Mode Pills (Auto-Apply vs Check Eligibility) */}
-              <div className="gemini-mode-pills">
-                <button
-                  type="button"
-                  className={`mode-pill ${activeMode === 'apply' ? 'active' : ''}`}
-                  onClick={() => {
-                    setActiveMode('apply');
-                    setPromptIndex(0);
-                  }}
-                  title="Directly automate submission on official portals with AI Agent"
-                >
-                  ⚡ Auto-Apply
-                </button>
-                <button
-                  type="button"
-                  className={`mode-pill ${activeMode === 'eligibility' ? 'active' : ''}`}
-                  onClick={() => {
-                    setActiveMode('eligibility');
-                    setPromptIndex(0);
-                  }}
-                  title="Verify criteria, income limits, and required documents before applying"
-                >
-                  🔍 Check Eligibility
-                </button>
-              </div>
-
-              {/* Bug 6: Dynamic Domain Category Filter Pills */}
-              <div className="gemini-domain-pills">
-                {DOMAIN_CATEGORIES.map((cat) => (
-                  <button
-                    key={cat.id}
-                    type="button"
-                    className={`domain-pill ${cat.id} ${selectedDomain === cat.id ? 'active' : ''}`}
-                    onClick={() => {
-                      setSelectedDomain(cat.id);
-                      setPromptIndex(0);
-                    }}
-                  >
-                    <span>{cat.icon}</span>
-                    <span>{cat.label}</span>
-                  </button>
-                ))}
-              </div>
-
-              {/* Suggestion Rows (Categorized by Domain with Category Badges) */}
-              <div className="gemini-suggestions">
-                {DOMAIN_SUGGESTIONS[activeMode]
-                  .filter((item) => selectedDomain === 'all' || item.domain === selectedDomain)
-                  .map((item, idx) => (
+                  {/* Mode Pills (Auto-Apply vs Check Eligibility) */}
+                  <div className="gemini-mode-pills">
                     <button
-                      key={idx}
                       type="button"
-                      className="suggestion-row"
+                      className={`mode-pill ${activeMode === 'apply' ? 'active' : ''}`}
                       onClick={() => {
-                        setIntent(item.text);
-                        handleIntentSubmit(item.text);
+                        setActiveMode('apply');
+                        setPromptIndex(0);
                       }}
+                      title="Directly automate submission on official portals with AI Agent"
                     >
-                      <span className="suggestion-lead-icon">
-                        {item.iconType === 'briefcase' && <Icons.Briefcase />}
-                        {item.iconType === 'sparkles' && <Icons.Sparkles />}
-                        {item.iconType === 'book' && <Icons.BookIdea />}
-                      </span>
-                      <span className="suggestion-text">{item.text}</span>
-                      <span className={`scheme-category-badge ${item.domain}`}>
-                        {item.domainLabel}
-                      </span>
+                      ⚡ Auto-Apply
                     </button>
-                  ))}
-              </div>
-
-              {/* Dynamic Intent Match Card (Bugs 1 & 2) */}
-              {isClassifying && (
-                <div style={{ marginTop: '1.25rem', color: '#94a3b8', fontSize: '0.88rem', display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-                  <div className="hunting-spinner" style={{ width: '16px', height: '16px' }} />
-                  <span>AI matching citizen request against official scheme catalog...</span>
-                </div>
-              )}
-
-              {selectedService && !isClassifying && (
-                <div className="matched-scheme-card">
-                  <div className="scheme-card-header">
-                    <div className="scheme-title-row">
-                      <span style={{ fontSize: '1.3rem' }}>
-                        {selectedService.category === 'education' && '🎓'}
-                        {selectedService.category === 'welfare' && '🏗️'}
-                        {selectedService.category === 'agriculture' && '🌾'}
-                        {selectedService.category === 'health' && '🏥'}
-                        {selectedService.category === 'general' && '🏛️'}
-                      </span>
-                      <h3 className="scheme-title">{selectedService.service_name}</h3>
-                    </div>
-                    <span className={`scheme-category-badge ${selectedService.category}`}>
-                      {selectedService.category}
-                    </span>
-                  </div>
-
-                  <div className="scheme-portal-info">
-                    <span>🏛️ Target: <strong>{selectedService.portal_name}</strong></span>
-                    <span>•</span>
-                    <a
-                      href={selectedService.portal_url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      style={{ color: '#38bdf8', textDecoration: 'none' }}
+                    <button
+                      type="button"
+                      className={`mode-pill ${activeMode === 'eligibility' ? 'active' : ''}`}
+                      onClick={() => {
+                        setActiveMode('eligibility');
+                        setPromptIndex(0);
+                      }}
+                      title="Verify criteria, income limits, and required documents before applying"
                     >
-                      {new URL(selectedService.portal_url).hostname} ↗
-                    </a>
+                      🔍 Check Eligibility
+                    </button>
                   </div>
 
-                  <div className="scheme-desc">{selectedService.description}</div>
-
-                  <div className="scheme-docs-section">
-                    <span className="scheme-docs-label">Required Documents:</span>
-                    {selectedService.required_documents.map((doc, i) => (
-                      <span key={i} className="scheme-doc-pill">📎 {doc}</span>
+                  {/* Dynamic Domain Category Filter Pills */}
+                  <div className="gemini-domain-pills">
+                    {DOMAIN_CATEGORIES.map((cat) => (
+                      <button
+                        key={cat.id}
+                        type="button"
+                        className={`domain-pill ${cat.id} ${selectedDomain === cat.id ? 'active' : ''}`}
+                        onClick={() => {
+                          setSelectedDomain(cat.id);
+                          setPromptIndex(0);
+                        }}
+                      >
+                        <span>{cat.icon}</span>
+                        <span>{cat.label}</span>
+                      </button>
                     ))}
                   </div>
 
-                  <div className="scheme-actions-row">
+                  {/* Clean Human-Designed 2-Column Scheme Cards Grid (No vertical messy list) */}
+                  <div className="gemini-suggestions-grid">
+                    {DOMAIN_SUGGESTIONS[activeMode]
+                      .filter((item) => item.domain === selectedDomain)
+                      .map((item, idx) => (
+                        <div
+                          key={idx}
+                          className="scheme-suggest-card"
+                          onClick={() => {
+                            setIntent(item.text);
+                            handleIntentSubmit(item.text);
+                          }}
+                        >
+                          <div className="scheme-suggest-header">
+                            <span className="scheme-suggest-icon">
+                              {item.iconType === 'briefcase' && <Icons.Briefcase />}
+                              {item.iconType === 'sparkles' && <Icons.Sparkles />}
+                              {item.iconType === 'book' && <Icons.BookIdea />}
+                            </span>
+                            <span className={`scheme-category-badge ${item.domain}`}>
+                              {item.domainLabel}
+                            </span>
+                          </div>
+                          <div className="scheme-suggest-title">{item.text}</div>
+                          <div className="scheme-suggest-footer">
+                            <span>💬 Ask AI Advisor</span>
+                            <span>→</span>
+                          </div>
+                        </div>
+                      ))}
+                  </div>
+                </div>
+              ) : (
+                /* Step 1 Conversational AI Advisor Chat Interface */
+                <div className="advisor-chat-container">
+                  <div className="advisor-chat-header">
+                    <div className="advisor-header-title">
+                      <span style={{ fontSize: '1.25rem' }}>🤖</span>
+                      <div>
+                        <div style={{ fontWeight: 600, color: '#f8fafc', fontSize: '0.96rem' }}>
+                          GovTech AI Advisor & Scheme Navigator
+                        </div>
+                        <div style={{ fontSize: '0.75rem', color: '#94a3b8' }}>
+                          Conversational guidance across official portals • Ask questions or launch autonomous form filling
+                        </div>
+                      </div>
+                    </div>
                     <button
                       type="button"
-                      className="gemini-btn gemini-btn-tonal"
-                      style={{ fontSize: '0.78rem', padding: '0.35rem 0.75rem' }}
-                      onClick={() => setShowSchemePicker(!showSchemePicker)}
+                      className="advisor-reset-btn"
+                      onClick={() => {
+                        setAdvisorChat([]);
+                        setSelectedService(null);
+                      }}
+                      title="Start fresh consultation"
                     >
-                      {showSchemePicker ? '▲ Hide Scheme Picker' : '▾ Choose Different Scheme'}
+                      ↺ New Search
                     </button>
                   </div>
 
-                  {showSchemePicker && (
-                    <div style={{ marginTop: '1rem', borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '0.75rem' }}>
-                      <div style={{ fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.5rem', fontWeight: 600 }}>
-                        SELECT FROM OFFICIAL SCHEMES CATALOG:
-                      </div>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-                        {KNOWN_SERVICES_CATALOG.map((sch) => (
-                          <button
-                            key={sch.service_id}
-                            type="button"
-                            className={`picker-option-card ${selectedService.service_id === sch.service_id ? 'selected' : ''}`}
-                            onClick={() => handleSelectSchemeManual(sch)}
-                            style={{ padding: '0.6rem 0.85rem' }}
-                          >
-                            <div className="picker-card-left">
-                              <span className={`custom-radio-circle ${selectedService.service_id === sch.service_id ? 'checked' : ''}`}>
-                                {selectedService.service_id === sch.service_id && <span className="custom-radio-dot" />}
-                              </span>
-                              <span className="picker-opt-label" style={{ fontSize: '0.82rem' }}>{sch.service_name}</span>
+                  {/* Chat Messages */}
+                  <div className="advisor-messages-list">
+                    {advisorChat.map((msg) => (
+                      <div key={msg.id} className={`chat-bubble-row ${msg.sender}`}>
+                        {msg.sender === 'assistant' && (
+                          <div className="assistant-avatar">✨</div>
+                        )}
+
+                        <div className={`chat-bubble ${msg.sender}`}>
+                          <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>
+                            {msg.text}
+                          </div>
+
+                          {/* Interactive Matched Scheme Card inside Assistant Message */}
+                          {msg.schemeMatch && (
+                            <div className="chat-scheme-card">
+                              <div className="chat-scheme-title-row">
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                                  <span style={{ fontSize: '1.15rem' }}>🏛️</span>
+                                  <span className="chat-scheme-name">{msg.schemeMatch.service_name}</span>
+                                </div>
+                                <span className={`scheme-category-badge ${msg.schemeMatch.category}`}>
+                                  {msg.schemeMatch.category}
+                                </span>
+                              </div>
+
+                              <div style={{ fontSize: '0.8rem', color: '#94a3b8', display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
+                                <span>Target Portal: <strong style={{ color: '#e2e8f0' }}>{msg.schemeMatch.portal_name}</strong></span>
+                                {msg.schemeMatch.portal_url && (
+                                  <a
+                                    href={msg.schemeMatch.portal_url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    style={{ color: '#38bdf8', textDecoration: 'none' }}
+                                  >
+                                    {new URL(msg.schemeMatch.portal_url).hostname} ↗
+                                  </a>
+                                )}
+                              </div>
+
+                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', marginTop: '0.2rem' }}>
+                                <span style={{ fontSize: '0.75rem', color: '#cbd5e1', fontWeight: 600 }}>Required Docs:</span>
+                                {msg.schemeMatch.required_documents.map((doc, di) => (
+                                  <span key={di} className="scheme-doc-pill" style={{ fontSize: '0.72rem', padding: '0.15rem 0.45rem' }}>
+                                    📎 {doc}
+                                  </span>
+                                ))}
+                              </div>
+
+                              {/* Prominent Action Button to Proceed to Application Hub */}
+                              <div style={{ display: 'flex', gap: '0.6rem', marginTop: '0.4rem', flexWrap: 'wrap' }}>
+                                <button
+                                  type="button"
+                                  className="chat-route-btn"
+                                  onClick={() => handleProceedToApplication(msg.schemeMatch)}
+                                >
+                                  <span>🚀 {msg.schemeMatch.cta_message || 'Route Me to Application & Launch AI Agent'}</span>
+                                  <span>→</span>
+                                </button>
+
+                                <button
+                                  type="button"
+                                  className="gemini-btn gemini-btn-tonal"
+                                  style={{ fontSize: '0.78rem', padding: '0.4rem 0.8rem', borderRadius: '8px' }}
+                                  onClick={() => setShowSchemePicker(!showSchemePicker)}
+                                >
+                                  {showSchemePicker ? '▲ Hide Catalog' : '▾ Choose Different Scheme'}
+                                </button>
+                              </div>
+
+                              {showSchemePicker && (
+                                <div style={{ marginTop: '0.75rem', borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '0.6rem' }}>
+                                  <div style={{ fontSize: '0.74rem', color: '#94a3b8', marginBottom: '0.4rem', fontWeight: 600 }}>
+                                    SELECT FROM VERIFIED CATALOG:
+                                  </div>
+                                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                                    {KNOWN_SERVICES_CATALOG.map((sch) => (
+                                      <button
+                                        key={sch.service_id}
+                                        type="button"
+                                        className={`picker-option-card ${selectedService?.service_id === sch.service_id ? 'selected' : ''}`}
+                                        onClick={() => handleSelectSchemeManual(sch)}
+                                        style={{ padding: '0.45rem 0.75rem' }}
+                                      >
+                                        <span className="picker-opt-label" style={{ fontSize: '0.8rem' }}>{sch.service_name}</span>
+                                        <span className={`scheme-category-badge ${sch.category}`} style={{ fontSize: '0.6rem' }}>
+                                          {sch.category}
+                                        </span>
+                                      </button>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
                             </div>
-                            <span className={`scheme-category-badge ${sch.category}`} style={{ fontSize: '0.62rem' }}>
-                              {sch.category}
-                            </span>
-                          </button>
-                        ))}
+                          )}
+
+                          <div className="chat-timestamp">{msg.timestamp}</div>
+                        </div>
+
+                        {msg.sender === 'user' && (
+                          <div className="user-avatar">👤</div>
+                        )}
                       </div>
+                    ))}
+
+                    {/* AI Thinking Bubble */}
+                    {isClassifying && (
+                      <div className="chat-bubble-row assistant">
+                        <div className="assistant-avatar">✨</div>
+                        <div className="chat-bubble assistant" style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+                          <div className="hunting-spinner" style={{ width: '16px', height: '16px' }} />
+                          <span style={{ fontSize: '0.88rem', color: '#94a3b8' }}>
+                            AI Advisor is checking eligibility criteria & official portals...
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Pinned Search / Follow-Up Input Capsule */}
+                  <div className="gemini-search-capsule" style={{ width: '100%', maxWidth: '100%' }}>
+                    <div className="capsule-input-container">
+                      <input
+                        className="capsule-input"
+                        type="text"
+                        value={intent}
+                        placeholder="Ask a question (eligibility, documents, fee) or type 'route me' to apply..."
+                        onChange={(e) => setIntent(e.target.value)}
+                        onKeyDown={(e) => e.key === 'Enter' && handleIntentSubmit()}
+                      />
                     </div>
-                  )}
+
+                    <div className="capsule-actions">
+                      <button
+                        className={`capsule-icon-btn ${isListening ? 'recording' : ''}`}
+                        onClick={handleToggleVoice}
+                        title="Speak using Web Speech API"
+                      >
+                        <Icons.Mic />
+                      </button>
+
+                      <button
+                        className="capsule-submit-btn"
+                        disabled={!intent.trim()}
+                        onClick={() => handleIntentSubmit()}
+                        title="Send"
+                      >
+                        <Icons.ArrowUp />
+                      </button>
+                    </div>
+                  </div>
                 </div>
               )}
-            </div>
+            </>
           )}
 
           {/* ════════════════════════════════════════
