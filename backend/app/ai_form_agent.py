@@ -220,7 +220,7 @@ def _heuristic_action_plan(distilled_dom: dict, profile: CitizenProfile) -> List
             elif "marksheet" in lbl or "mark" in lbl or "degree" in lbl:
                 doc_type, kw = "marksheet", "marksheet"
             else:
-                doc_type, kw = "income_certificate", "income"
+                doc_type, kw = "supporting_document", "document"
 
             max_size = 200
             m = re.search(r"(\d+)\s*kb", lbl)
@@ -365,7 +365,7 @@ async def scan_and_blueprint_page(page: Page, profile: Optional[CitizenProfile] 
         "portal_url": dom.get("portal_url", ""),
         "title": dom.get("title", ""),
         "fields": dom.get("fields", []),
-        "required_documents": [d["doc_type"] for d in required_docs] or ["income_certificate", "aadhaar"],
+        "required_documents": [d["doc_type"] for d in required_docs],
         "required_documents_meta": required_docs,
         "action_plan": action_plan,
     }
@@ -399,20 +399,27 @@ async def scan_portal_url(url: str, profile: Optional[CitizenProfile] = None) ->
                 page = await context.new_page()
 
         if not navigated:
-            # Fallback for offline development or unhosted sample gov portals
+            # Fallback for offline development: ONLY match if URL explicitly references that template
             static_dir = Path(__file__).resolve().parent.parent / "static"
-            # Try to match static html files
             cand_files = list(static_dir.glob("*.html")) if static_dir.exists() else []
-            if cand_files:
-                # Prefer matching slug or first available static portal
-                target_file = cand_files[0]
-                for cf in cand_files:
-                    if cf.stem.lower() in target_url.lower():
-                        target_file = cf
-                        break
+            target_file = None
+            for cf in cand_files:
+                if cf.stem.lower() in target_url.lower():
+                    target_file = cf
+                    break
+            if target_file:
                 await page.goto(f"file://{target_file.resolve()}", wait_until="domcontentloaded")
             else:
-                raise RuntimeError(f"Could not reach portal URL '{url}' and no local portal template was found.")
+                # Do NOT randomly map an unreachable government portal to rajmsme income certificate mock!
+                logger.info("No matching local mock for %s; returning clean descriptor.", target_url)
+                return {
+                    "portal_url": target_url,
+                    "title": target_url,
+                    "fields": [],
+                    "required_documents": [],
+                    "required_documents_meta": [],
+                    "action_plan": [],
+                }
 
         blueprint = await scan_and_blueprint_page(page, profile)
         return blueprint

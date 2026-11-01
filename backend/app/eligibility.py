@@ -17,6 +17,7 @@ live portal. These are sensible generic placeholders only.
 
 from __future__ import annotations
 
+import re
 from datetime import date
 from typing import Any, Callable, Optional
 
@@ -521,9 +522,39 @@ def check_eligibility(
     """
     normalized_id = _SERVICE_ALIASES.get(service_id.lower().strip(), service_id.strip())
     if normalized_id not in SERVICE_RULES:
-        raise ValueError(
-            f"Unknown service_id: '{service_id}'. "
-            f"Supported: {list(SERVICE_RULES.keys())}"
+        # Universal validation for general citizen registrations (e.g., DigiLocker, unmapped portals)
+        svc_name = service_id.replace("_", " ").replace("-", " ").title()
+        has_name = bool(profile.full_name and len(profile.full_name.strip()) >= 2)
+        clean_mobile = re.sub(r'\D', '', profile.mobile_number or "")
+        has_mobile = len(clean_mobile) == 10
+
+        results = [
+            RuleResult(
+                rule_id="name_verified",
+                description="Citizen Name Verification",
+                passed=has_name,
+                explanation="Citizen full name verified." if has_name else "Citizen full name is required for registration.",
+            ),
+            RuleResult(
+                rule_id="mobile_verified",
+                description="Mobile Communication Verification",
+                passed=has_mobile,
+                explanation="Valid 10-digit mobile number provided for portal communication." if has_mobile else "Valid 10-digit mobile number is required.",
+            ),
+        ]
+
+        all_passed = has_name and has_mobile
+        summary = (
+            f"Citizen profile verified for '{svc_name}'. General application requirements satisfied."
+            if all_passed
+            else f"Please complete your profile details to proceed with '{svc_name}'."
+        )
+
+        return EligibilityResponse(
+            eligible=all_passed,
+            service_name=svc_name,
+            results=results,
+            summary=summary,
         )
 
     service_cfg = SERVICE_RULES[normalized_id]
@@ -698,7 +729,7 @@ def _llm_classify_intent(raw_query: str) -> "IntentClassifyResponse | None":
         raw_sid = str(raw_data.get("matched_service_id") or "").strip()
         expl = str(raw_data.get("explanation") or f"AI matched intent to {raw_sid}." if raw_sid else "")
         raw_docs = raw_data.get("suggested_documents")
-        docs = [str(d) for d in raw_docs] if isinstance(raw_docs, list) and raw_docs else ["income_certificate", "aadhaar"]
+        docs = [str(d) for d in raw_docs] if isinstance(raw_docs, list) else []
         advice = raw_data.get("ai_advice") or expl
         can_auto = bool(raw_data.get("can_automate", True))
         cta = str(raw_data.get("cta_message") or "Proceed to Document Hub")
@@ -799,7 +830,7 @@ def classify_citizen_intent(text: str) -> IntentClassifyResponse:
             category="general",
             confidence=0.5,
             explanation="No query provided; defaulted to ServicePlus.",
-            suggested_documents=["income_certificate", "aadhaar"],
+            suggested_documents=["Aadhaar Card"],
             ai_advice="Welcome to Voice-to-Legacy! Please ask any question about government schemes, scholarships, farmer support, or citizen certificates.",
             can_automate=True,
             cta_message="Launch Autonomous Form Agent",
@@ -919,7 +950,7 @@ def classify_citizen_intent(text: str) -> IntentClassifyResponse:
         category="general",
         confidence=0.60,
         explanation="Query did not strongly match a specific scheme; defaulted to ServicePlus 1784.",
-        suggested_documents=["income_certificate", "aadhaar"],
+        suggested_documents=["Aadhaar Card"],
         ai_advice="We could not definitively match your query to a single scheme. You can explore standard citizen registration on ServicePlus or search again.",
         can_automate=True,
         cta_message="Open Citizen Registration",

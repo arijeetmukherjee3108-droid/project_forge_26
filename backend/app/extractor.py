@@ -49,7 +49,7 @@ _RE_FULL_NAME = re.compile(
 
 # Father / guardian
 _RE_FATHER = re.compile(
-    r"(?:father(?:'?s)?\s+name|pita\s*(?:ka\s*)?naam|guardian\s+name)\s*[:\-]\s*([A-Za-z][A-Za-z\s\.]{2,58}?)\s*$",
+    r"(?:father(?:'?s)?\s+name|pita\s*(?:ka\s*)?naam|guardian\s+name|c\/o|s\/o|d\/o|w\/o)\s*[:\-]\s*([A-Za-z][A-Za-z\s\.]{2,58}?)(?:,|$)",
     re.IGNORECASE | re.MULTILINE,
 )
 
@@ -560,6 +560,7 @@ def extract_profile(file_bytes: bytes, filename: str) -> ExtractResponse:
                 raw_text="",
                 file_bytes=file_bytes,
                 ext=ext,
+                filename=filename,
             )
         return empty_result
 
@@ -588,13 +589,14 @@ def extract_profile(file_bytes: bytes, filename: str) -> ExtractResponse:
         raw_text_preview=masked_preview,
     )
 
-    # ---- LLM fallback: only when regex left more than 3 uncertain fields ----
-    if len(uncertain) > 3:
+    # ---- LLM fallback: when regex missed key fields (full_name, dob) or left >3 uncertain fields ----
+    if not result.profile.full_name or not result.profile.date_of_birth or len(uncertain) > 3:
         result = _llm_extraction_fallback(
             result=result,
             raw_text=raw_text,
             file_bytes=file_bytes,
             ext=ext,
+            filename=filename,
         )
 
     return result
@@ -646,6 +648,8 @@ class ExtractedProfileLLM(_BaseModel):
     email: _Optional[str] = None
     aadhaar_last4: _Optional[str] = None
     annual_income: _Optional[int] = None
+    address_line: _Optional[str] = None
+    village_or_city: _Optional[str] = None
     state: _Optional[str] = None
     district: _Optional[str] = None
     pincode: _Optional[str] = None
@@ -655,6 +659,13 @@ class ExtractedProfileLLM(_BaseModel):
 # ---------------------------------------------------------------------------
 # Field normalizers — each returns None on invalid input
 # ---------------------------------------------------------------------------
+
+def _norm_address(v: _Optional[str]) -> _Optional[str]:
+    if not v:
+        return None
+    s = str(v).strip()
+    s = _re.sub(r"^(?:address|pata|पता)\s*[:\-]\s*", "", s, flags=_re.IGNORECASE).strip()
+    return s if len(s) >= 4 else None
 
 def _norm_dob(v: _Optional[str]) -> _Optional[str]:
     """Parse and normalize DOB to YYYY-MM-DD. Reject future dates."""
@@ -774,10 +785,8 @@ def _norm_name(v: _Optional[str]) -> _Optional[str]:
 # ---------------------------------------------------------------------------
 
 _LLM_EXTRACT_SYSTEM = """\
-You are a precise Indian government document parser.
-Extract the citizen's personal information and respond ONLY with a JSON object \
-containing exactly these 12 keys (use null for any field not clearly present — \
-NEVER guess or invent values):
+You are an expert Indian government document parser (Aadhaar card, PAN card, Voter ID, Marksheets, Income Certificates).
+Extract the citizen's personal information and respond ONLY with a JSON object containing exactly these 14 keys (use null for any field not clearly present — NEVER guess or invent values):
 
 {
   "full_name": null,
@@ -788,34 +797,33 @@ NEVER guess or invent values):
   "email": null,
   "aadhaar_last4": null,
   "annual_income": null,
+  "address_line": null,
+  "village_or_city": null,
   "state": null,
   "district": null,
   "pincode": null,
   "category": null
 }
 
-Rules:
-- date_of_birth: output YYYY-MM-DD only.
-- gender: output "male", "female", or "other" only.
-- mobile_number: 10 digits only, no country code.
-- aadhaar_last4: output ONLY the last 4 digits of the Aadhaar number. NEVER \
-output a full Aadhaar.
-- annual_income: integer rupees only, no symbols or commas.
-- state: full Indian state or UT name (e.g. "Rajasthan").
-- category: one of general, obc, sc, st, ews.
-- Handle English, Hindi (Devanagari), and Hinglish. Transliterate names to \
-Latin script only if the document itself provides that form.
-- No markdown. No extra text. Only the JSON object."""
+Guidelines:
+1. Citizen Full Name: Extract the primary individual/cardholder/applicant name. Identify the name from visual prominence and document context even if there is no "Name:" label.
+2. Parent / Guardian / Care-of Name: If a father, mother, spouse, or guardian is specified (e.g., C/O, S/O, D/O, W/O, Father's Name), put it in 'father_or_guardian_name'. Keep it distinct from the citizen's own name.
+3. Date of Birth: Format as YYYY-MM-DD.
+4. Gender: Output "male", "female", or "other".
+5. Address: Extract full residential address into 'address_line'. Extract district, state, and 6-digit postal pincode.
+6. Mobile & Aadhaar: Extract 10-digit mobile number. For Aadhaar, extract ONLY the last 4 digits.
+7. Return raw JSON only — no explanation, no markdown backticks."""
 
 _LLM_EXTRACT_TEXT_USER = """\
-Extract the citizen's personal information from this Indian government document text.
-Return standard ISO dates (YYYY-MM-DD), extract only the last 4 digits of Aadhaar,
-and normalize state names (e.g. 'Rajasthan').
+Document Filename: {filename}
 
-DOCUMENT TEXT:
+Extract all citizen profile details from this document text:
 {text}"""
 
-_LLM_EXTRACT_VISION_USER = "Extract the fields from this document image."
+_LLM_EXTRACT_VISION_USER = """\
+Document Filename: {filename}
+
+Carefully inspect this document image and extract all citizen personal details (full name, date of birth in YYYY-MM-DD, father/guardian name, gender, full address, district, state, pincode, mobile number)."""
 
 import logging as _logging
 _logger = _logging.getLogger(__name__)
@@ -844,6 +852,8 @@ def _validate_and_normalize_llm_output(raw: dict) -> dict:
         "email": _norm_email,
         "aadhaar_last4": _norm_aadhaar,
         "annual_income": _norm_income,
+        "address_line": _norm_address,
+        "village_or_city": _norm_district,
         "state": _norm_state,
         "district": _norm_district,
         "pincode": _norm_pincode,
@@ -937,15 +947,15 @@ def _llm_extraction_fallback(
     raw_text: str,
     file_bytes: bytes,
     ext: str,
+    filename: str = "",
 ) -> "ExtractResponse":
     """
-    Attempt to fill uncertain fields using the Groq LLM.
+    Attempt to fill uncertain fields using the Groq LLM and Vision models.
 
-    Text path: send raw_text (truncated) to the text model.
-    Vision path: convert to PNG pages and send to the vision model.
+    Text path: send raw_text (truncated) to the text model with filename.
+    Vision path: convert to PNG pages and send to the vision model with filename.
       - Always used for image files (.jpg/.jpeg/.png).
-      - Also used for scanned PDFs (raw_text very short) or when text path
-        leaves key fields still empty.
+      - Also used for scanned PDFs (raw_text very short) or when key fields are missing.
 
     Returns the original result unchanged on any error.
     """
@@ -966,7 +976,7 @@ def _llm_extraction_fallback(
 
         # ---- TEXT PATH ----
         if not IS_IMAGE and not text_is_thin:
-            user_msg = _LLM_EXTRACT_TEXT_USER.format(text=raw_text[:4000])
+            user_msg = _LLM_EXTRACT_TEXT_USER.format(filename=filename or "document", text=raw_text[:4000])
             llm_raw = chat_json(
                 system_prompt=_LLM_EXTRACT_SYSTEM,
                 user_content=user_msg,
@@ -978,22 +988,22 @@ def _llm_extraction_fallback(
                 )
 
         # ---- VISION PATH ----
-        # Run if: image file, scanned PDF, or text path left key fields still missing
-        _key_fields = {"full_name", "date_of_birth", "mobile_number", "state"}
-        text_left_gaps = bool(
-            _key_fields & set(result.uncertain_fields)
-        ) and not llm_raw
+        # Run if: image file, scanned PDF, or critical identity fields (full_name / dob) remain missing
+        has_full_name = bool(llm_raw.get("full_name") or getattr(result.profile, "full_name", None))
+        has_dob = bool(llm_raw.get("date_of_birth") or getattr(result.profile, "date_of_birth", None))
+        critical_missing = not has_full_name or not has_dob
 
-        if IS_IMAGE or text_is_thin or text_left_gaps:
+        if IS_IMAGE or text_is_thin or critical_missing:
             if IS_IMAGE:
                 images = [file_bytes]   # raw image bytes directly
             else:
                 images = _pdf_to_png_pages(file_bytes, max_pages=3)
 
             if images:
+                user_vis = _LLM_EXTRACT_VISION_USER.format(filename=filename or "document")
                 vision_raw = chat_json_vision(
                     system_prompt=_LLM_EXTRACT_SYSTEM,
-                    user_text=_LLM_EXTRACT_VISION_USER,
+                    user_text=user_vis,
                     images=images,
                 )
                 if vision_raw:
