@@ -457,32 +457,38 @@ const toIsoDate = (val?: string) => {
 const getRelevantFieldsForService = (
   selectedService?: IntentClassificationResponse | null
 ): FieldMeta[] => {
-  // Dynamically adapt to whichever fields the LLM classifier distilled for this portal in Step 1
+  // Always include core citizen identity fields (Full Name & Mobile Number) so the user always has fields to verify
+  const baseKeys = new Set<string>(['full_name', 'mobile_number']);
+
   if (selectedService?.fields_to_fill && selectedService.fields_to_fill.length > 0) {
     const needed = selectedService.fields_to_fill.map((s) => s.toLowerCase());
-    const matched = FORM_FIELDS.filter((f) => {
+    FORM_FIELDS.forEach((f) => {
       const key = (f.key as string).toLowerCase();
       const lbl = f.label.toLowerCase();
-      return needed.some(
-        (n) =>
-          n.includes(key) ||
-          key.includes(n) ||
-          n.includes(lbl.split(' ')[0]) ||
-          (n.includes('name') && key === 'full_name' && !n.includes('father')) ||
-          (n.includes('father') && key === 'father_or_guardian_name') ||
-          ((n.includes('birth') || n.includes('dob')) && key === 'date_of_birth') ||
-          (n.includes('gender') && key === 'gender') ||
-          ((n.includes('mobile') || n.includes('phone')) && key === 'mobile_number') ||
-          (n.includes('email') && key === 'email') ||
-          (n.includes('state') && key === 'state') ||
-          (n.includes('district') && key === 'district') ||
-          (n.includes('income') && key === 'annual_income') ||
-          ((n.includes('category') || n.includes('caste')) && key === 'category') ||
-          (n.includes('address') && key === 'address_line') ||
-          ((n.includes('pin') || n.includes('postal')) && key === 'pincode')
-      );
+      if (
+        needed.some(
+          (n) =>
+            n.includes(key) ||
+            key.includes(n) ||
+            n.includes(lbl.split(' ')[0]) ||
+            (n.includes('name') && key === 'full_name' && !n.includes('father')) ||
+            (n.includes('father') && key === 'father_or_guardian_name') ||
+            ((n.includes('birth') || n.includes('dob')) && key === 'date_of_birth') ||
+            (n.includes('gender') && key === 'gender') ||
+            ((n.includes('mobile') || n.includes('phone')) && key === 'mobile_number') ||
+            (n.includes('email') && key === 'email') ||
+            (n.includes('state') && key === 'state') ||
+            (n.includes('district') && key === 'district') ||
+            (n.includes('income') && key === 'annual_income') ||
+            ((n.includes('category') || n.includes('caste')) && key === 'category') ||
+            (n.includes('address') && key === 'address_line') ||
+            ((n.includes('pin') || n.includes('postal')) && key === 'pincode')
+        )
+      ) {
+        baseKeys.add(f.key as string);
+      }
     });
-    if (matched.length > 0) return matched;
+    return FORM_FIELDS.filter((f) => baseKeys.has(f.key as string));
   }
 
   // Fallback: general common identity fields
@@ -651,23 +657,26 @@ const App: React.FC = () => {
   };
 
   // Step Completion Validation (Gates)
-  const isStep1Done = Boolean(intent.trim().length > 0 || currentStep > 1);
-  const isStep2Done = Boolean(extraction !== null || currentStep > 2);
-  const isStep3Done = Boolean(verified && eligibility !== null || currentStep > 3);
+  const hasExtractedDocument = Boolean(
+    extraction !== null || (profile.source_documents && profile.source_documents.length > 0)
+  );
+  const isStep1Done = Boolean(selectedService !== null || intent.trim().length > 0);
+  const isStep2Done = Boolean(hasExtractedDocument);
+  const isStep3Done = Boolean(verified);
 
   const canNavigateToStep = (stepNumber: number) => {
     if (stepNumber === 1) return true;
     if (stepNumber === 2) return isStep1Done;
-    if (stepNumber === 3) return isStep2Done;
-    if (stepNumber === 4) return isStep3Done;
+    if (stepNumber === 3) return isStep1Done && isStep2Done;
+    if (stepNumber === 4) return isStep1Done && isStep2Done && isStep3Done;
     return false;
   };
 
   const handleStepClick = (targetStep: number) => {
     if (!canNavigateToStep(targetStep)) {
       if (targetStep === 2) showToast('Please enter your intent or select a service first', 'error');
-      else if (targetStep === 3) showToast('Please upload and extract a document first', 'error');
-      else if (targetStep === 4) showToast('Please verify your citizen data & check eligibility first', 'error');
+      else if (targetStep === 3) showToast('Please upload and extract your required document in Step 2 first', 'error');
+      else if (targetStep === 4) showToast('Please verify your citizen data before proceeding to Live Agent', 'error');
       return;
     }
     setCurrentStep(targetStep);
@@ -2133,8 +2142,8 @@ const App: React.FC = () => {
                 </button>
               </div>
 
-              {/* Extracted Document Preview Card (shows accumulated extracted data before proceeding) */}
-              {(profile.full_name || profile.father_or_guardian_name || profile.date_of_birth || profile.mobile_number) && (
+              {/* Extracted Document Preview Card (Only shown once document is uploaded & extracted) */}
+              {isStep2Done ? (
                 <div style={{ marginTop: '1.5rem', background: 'rgba(56, 189, 248, 0.05)', border: '1px solid rgba(56, 189, 248, 0.25)', borderRadius: '12px', padding: '1.25rem' }}>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.85rem' }}>
                     <div style={{ fontWeight: 700, fontSize: '0.92rem', color: '#f8fafc' }}>
@@ -2210,6 +2219,16 @@ const App: React.FC = () => {
                     >
                       Review & Verify Details →
                     </button>
+                  </div>
+                </div>
+              ) : (
+                <div style={{ marginTop: '1.25rem', padding: '1.1rem 1.25rem', background: 'rgba(255, 255, 255, 0.02)', borderRadius: '10px', border: '1px dashed rgba(56, 189, 248, 0.3)', textAlign: 'center' }}>
+                  <div style={{ color: '#38bdf8', fontSize: '0.88rem', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', marginBottom: '0.35rem' }}>
+                    <span>🔒</span>
+                    <span>Document Upload Required for Step 3</span>
+                  </div>
+                  <div style={{ color: '#94a3b8', fontSize: '0.8rem' }}>
+                    Please upload your required document above and click <strong>Extract Details</strong> (or auto-fetch via Google Vault) to extract your profile and proceed to verification.
                   </div>
                 </div>
               )}
