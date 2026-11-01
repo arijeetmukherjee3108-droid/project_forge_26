@@ -542,17 +542,26 @@ def extract_profile(file_bytes: bytes, filename: str) -> ExtractResponse:
                 + _INSTALL_HINT
             )
 
-    # ---- If OCR totally unavailable, return a safe empty response
+    # ---- If OCR totally unavailable, try LLM vision for images; else return empty
     if ocr_warning and not raw_text.strip():
         empty_profile = CitizenProfile(
             uncertain_fields=ALL_PROFILE_FIELDS,
             source_documents=[],
         )
-        return ExtractResponse(
+        empty_result = ExtractResponse(
             profile=empty_profile,
             uncertain_fields=ALL_PROFILE_FIELDS,
             raw_text_preview=ocr_warning,
         )
+        # For image files, the vision LLM can still read the document directly.
+        if ext in {".jpg", ".jpeg", ".png"}:
+            return _llm_extraction_fallback(
+                result=empty_result,
+                raw_text="",
+                file_bytes=file_bytes,
+                ext=ext,
+            )
+        return empty_result
 
     # ---- Field extraction
     fields, uncertain = _extract_fields(raw_text)
@@ -571,10 +580,441 @@ def extract_profile(file_bytes: bytes, filename: str) -> ExtractResponse:
     # ---- raw_text_preview: first 300 chars, Aadhaar masked
     masked_preview = _mask_aadhaar(raw_text[:300])
     if ocr_warning:
-        masked_preview = f"[Warning: {ocr_warning}]\n\n{masked_preview}"
+        masked_preview = f"[Warning: {ocr_warning}]\\n\\n{masked_preview}"
 
-    return ExtractResponse(
+    result = ExtractResponse(
         profile=profile,
         uncertain_fields=uncertain,
         raw_text_preview=masked_preview,
     )
+
+    # ---- LLM fallback: only when regex left more than 3 uncertain fields ----
+    if len(uncertain) > 3:
+        result = _llm_extraction_fallback(
+            result=result,
+            raw_text=raw_text,
+            file_bytes=file_bytes,
+            ext=ext,
+        )
+
+    return result
+
+
+# ===========================================================================
+# LLM Extraction Fallback — Brain layer only.
+# Must NOT be called unless uncertain_fields > 3.
+# Never overwrites regex-extracted values.
+# Never crashes — returns the original result unchanged on any error.
+# ===========================================================================
+
+import re as _re                  # already imported at top; alias for clarity below
+from datetime import date as _date
+from typing import Optional as _Optional
+
+from pydantic import BaseModel as _BaseModel
+
+
+# ---------------------------------------------------------------------------
+# Indian states/UTs canonical list for normalization
+# ---------------------------------------------------------------------------
+
+_INDIAN_STATES: dict[str, str] = {
+    s.lower(): s for s in [
+        "Andhra Pradesh", "Arunachal Pradesh", "Assam", "Bihar", "Chhattisgarh",
+        "Goa", "Gujarat", "Haryana", "Himachal Pradesh", "Jharkhand", "Karnataka",
+        "Kerala", "Madhya Pradesh", "Maharashtra", "Manipur", "Meghalaya", "Mizoram",
+        "Nagaland", "Odisha", "Punjab", "Rajasthan", "Sikkim", "Tamil Nadu",
+        "Telangana", "Tripura", "Uttar Pradesh", "Uttarakhand", "West Bengal",
+        "Andaman and Nicobar Islands", "Chandigarh", "Dadra and Nagar Haveli and Daman and Diu",
+        "Delhi", "Jammu and Kashmir", "Ladakh", "Lakshadweep", "Puducherry",
+    ]
+}
+
+# ---------------------------------------------------------------------------
+# Extraction Pydantic model (internal to extractor — not in schemas.py)
+# ---------------------------------------------------------------------------
+
+
+class ExtractedProfileLLM(_BaseModel):
+    """Raw LLM output validator for document extraction. Every field defaults to None."""
+
+    full_name: _Optional[str] = None
+    father_or_guardian_name: _Optional[str] = None
+    date_of_birth: _Optional[str] = None
+    gender: _Optional[str] = None
+    mobile_number: _Optional[str] = None
+    email: _Optional[str] = None
+    aadhaar_last4: _Optional[str] = None
+    annual_income: _Optional[int] = None
+    state: _Optional[str] = None
+    district: _Optional[str] = None
+    pincode: _Optional[str] = None
+    category: _Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# Field normalizers — each returns None on invalid input
+# ---------------------------------------------------------------------------
+
+def _norm_dob(v: _Optional[str]) -> _Optional[str]:
+    """Parse and normalize DOB to YYYY-MM-DD. Reject future dates."""
+    if not v:
+        return None
+    v = str(v).strip()
+    # Already ISO
+    if _re.fullmatch(r"\d{4}-\d{2}-\d{2}", v):
+        iso = v
+    else:
+        # DD/MM/YYYY or DD-MM-YYYY
+        m = _re.fullmatch(r"(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})", v)
+        if m:
+            d, mo, y = m.group(1), m.group(2), m.group(3)
+            iso = f"{y}-{int(mo):02d}-{int(d):02d}"
+        else:
+            return None
+    try:
+        parsed = _date.fromisoformat(iso)
+    except ValueError:
+        return None
+    if parsed > _date.today():   # reject future dates
+        return None
+    return iso
+
+
+def _norm_gender(v: _Optional[str]) -> _Optional[str]:
+    """Normalize gender to male/female/other."""
+    if not v:
+        return None
+    mapping = {
+        "male": "male", "m": "male", "पुरुष": "male",
+        "female": "female", "f": "female", "महिला": "female",
+        "other": "other", "o": "other",
+    }
+    return mapping.get(str(v).strip().lower())
+
+
+def _norm_mobile(v: _Optional[str]) -> _Optional[str]:
+    """Strip country code/spaces; return 10-digit number starting 6-9 or None."""
+    if not v:
+        return None
+    digits = _re.sub(r"\D", "", str(v))
+    if digits.startswith("91") and len(digits) == 12:
+        digits = digits[2:]
+    if len(digits) == 10 and digits[0] in "6789":
+        return digits
+    return None
+
+
+def _norm_email(v: _Optional[str]) -> _Optional[str]:
+    if not v:
+        return None
+    s = str(v).strip()
+    return s if _re.fullmatch(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}", s) else None
+
+
+def _norm_aadhaar(v: _Optional[str]) -> _Optional[str]:
+    """Keep only last 4 digits; reject if not exactly 4 digits after stripping."""
+    if not v:
+        return None
+    digits = _re.sub(r"\D", "", str(v))
+    if len(digits) >= 4:
+        last4 = digits[-4:]
+        return last4 if last4.isdigit() else None
+    return None
+
+
+def _norm_income(v) -> _Optional[int]:
+    if v is None:
+        return None
+    cleaned = _re.sub(r"[^\d]", "", str(v))
+    try:
+        val = int(cleaned)
+        return val if val >= 0 else None
+    except ValueError:
+        return None
+
+
+def _norm_state(v: _Optional[str]) -> _Optional[str]:
+    if not v:
+        return None
+    return _INDIAN_STATES.get(str(v).strip().lower())
+
+
+def _norm_district(v: _Optional[str]) -> _Optional[str]:
+    if not v:
+        return None
+    return str(v).strip().title() or None
+
+
+def _norm_pincode(v: _Optional[str]) -> _Optional[str]:
+    if not v:
+        return None
+    s = _re.sub(r"\D", "", str(v))
+    return s if (len(s) == 6 and s[0] != "0") else None
+
+
+def _norm_category(v: _Optional[str]) -> _Optional[str]:
+    if not v:
+        return None
+    VALID = {"general", "obc", "sc", "st", "ews"}
+    s = str(v).strip().lower()
+    return s if s in VALID else None
+
+
+def _norm_name(v: _Optional[str]) -> _Optional[str]:
+    if not v:
+        return None
+    # Strip OCR junk characters — keep letters, spaces, dots, hyphens
+    cleaned = _re.sub(r"[^\w\s.\-]", "", str(v), flags=_re.UNICODE).strip()
+    return cleaned if len(cleaned) >= 2 else None
+
+
+# ---------------------------------------------------------------------------
+# LLM system prompt (shared between text and vision paths)
+# ---------------------------------------------------------------------------
+
+_LLM_EXTRACT_SYSTEM = """\
+You are a precise Indian government document parser.
+Extract the citizen's personal information and respond ONLY with a JSON object \
+containing exactly these 12 keys (use null for any field not clearly present — \
+NEVER guess or invent values):
+
+{
+  "full_name": null,
+  "father_or_guardian_name": null,
+  "date_of_birth": null,
+  "gender": null,
+  "mobile_number": null,
+  "email": null,
+  "aadhaar_last4": null,
+  "annual_income": null,
+  "state": null,
+  "district": null,
+  "pincode": null,
+  "category": null
+}
+
+Rules:
+- date_of_birth: output YYYY-MM-DD only.
+- gender: output "male", "female", or "other" only.
+- mobile_number: 10 digits only, no country code.
+- aadhaar_last4: output ONLY the last 4 digits of the Aadhaar number. NEVER \
+output a full Aadhaar.
+- annual_income: integer rupees only, no symbols or commas.
+- state: full Indian state or UT name (e.g. "Rajasthan").
+- category: one of general, obc, sc, st, ews.
+- Handle English, Hindi (Devanagari), and Hinglish. Transliterate names to \
+Latin script only if the document itself provides that form.
+- No markdown. No extra text. Only the JSON object."""
+
+_LLM_EXTRACT_TEXT_USER = """\
+Extract the citizen's personal information from this Indian government document text.
+Return standard ISO dates (YYYY-MM-DD), extract only the last 4 digits of Aadhaar,
+and normalize state names (e.g. 'Rajasthan').
+
+DOCUMENT TEXT:
+{text}"""
+
+_LLM_EXTRACT_VISION_USER = "Extract the fields from this document image."
+
+import logging as _logging
+_logger = _logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Core fallback orchestration
+# ---------------------------------------------------------------------------
+
+def _validate_and_normalize_llm_output(raw: dict) -> dict:
+    """
+    Validate raw LLM dict against ExtractedProfileLLM, then normalize each field.
+    Returns a dict of field→normalized_value; invalid fields become None (not dropped).
+    """
+    try:
+        parsed = ExtractedProfileLLM.model_validate(raw)
+    except Exception:
+        return {}
+
+    normalizers = {
+        "full_name": _norm_name,
+        "father_or_guardian_name": _norm_name,
+        "date_of_birth": _norm_dob,
+        "gender": _norm_gender,
+        "mobile_number": _norm_mobile,
+        "email": _norm_email,
+        "aadhaar_last4": _norm_aadhaar,
+        "annual_income": _norm_income,
+        "state": _norm_state,
+        "district": _norm_district,
+        "pincode": _norm_pincode,
+        "category": _norm_category,
+    }
+
+    result: dict = {}
+    for field, norm_fn in normalizers.items():
+        raw_val = getattr(parsed, field, None)
+        try:
+            result[field] = norm_fn(raw_val)
+        except Exception:
+            result[field] = None
+    return result
+
+
+def _pdf_to_png_pages(file_bytes: bytes, max_pages: int = 3) -> list[bytes]:
+    """Render up to max_pages of a PDF to PNG bytes lists (in-memory, no disk)."""
+    doc = fitz.open(stream=file_bytes, filetype="pdf")
+    pages: list[bytes] = []
+    for i, page in enumerate(doc):
+        if i >= max_pages:
+            break
+        # 150 dpi — good quality without hitting Groq size limits
+        png_bytes = page.get_pixmap(dpi=150).tobytes("png")
+        pages.append(png_bytes)
+    doc.close()
+    return pages
+
+
+def _merge_llm_into_result(
+    result: "ExtractResponse",
+    llm_fields: dict,
+    source_label: str,
+) -> "ExtractResponse":
+    """
+    Merge normalized LLM fields into result. Rules:
+    - Only fill fields that are currently None AND in uncertain_fields.
+    - Never overwrite a field the regex already extracted.
+    - Remove filled fields from uncertain_fields.
+    - Set extraction_source and llm_filled_fields.
+    Returns a new ExtractResponse (profile is mutated in-place is fine since
+    it's our own object).
+    """
+    profile = result.profile
+    uncertain = list(result.uncertain_fields)   # mutable copy
+    filled: list[str] = []
+
+    # Map from LLM field names to CitizenProfile field names (all match 1-to-1
+    # except gender/category which are Enums in the profile)
+    for field, llm_val in llm_fields.items():
+        if llm_val is None:
+            continue
+        # Only fill if currently None or uncertain
+        current = getattr(profile, field, None)
+        if current is not None:
+            continue   # regex won — never overwrite
+        if field not in uncertain:
+            continue   # regex was confident — skip
+
+        # Apply: handle Enum fields specially
+        try:
+            if field == "gender":
+                from app.schemas import Gender  # type: ignore
+                setattr(profile, field, Gender(llm_val))
+            elif field == "category":
+                from app.schemas import Category  # type: ignore
+                setattr(profile, field, Category(llm_val))
+            else:
+                setattr(profile, field, llm_val)
+            filled.append(field)
+            if field in uncertain:
+                uncertain.remove(field)
+        except Exception:
+            pass   # invalid enum value → leave uncertain
+
+    # Update profile.uncertain_fields
+    profile.uncertain_fields = uncertain
+
+    return ExtractResponse(
+        profile=profile,
+        uncertain_fields=uncertain,
+        raw_text_preview=result.raw_text_preview,
+        extraction_source=source_label,
+        llm_filled_fields=filled,
+    )
+
+
+def _llm_extraction_fallback(
+    result: "ExtractResponse",
+    raw_text: str,
+    file_bytes: bytes,
+    ext: str,
+) -> "ExtractResponse":
+    """
+    Attempt to fill uncertain fields using the Groq LLM.
+
+    Text path: send raw_text (truncated) to the text model.
+    Vision path: convert to PNG pages and send to the vision model.
+      - Always used for image files (.jpg/.jpeg/.png).
+      - Also used for scanned PDFs (raw_text very short) or when text path
+        leaves key fields still empty.
+
+    Returns the original result unchanged on any error.
+    """
+    try:
+        try:
+            import app.llm_client as _llm  # type: ignore
+        except ImportError:
+            import backend.app.llm_client as _llm  # type: ignore
+
+        chat_json = _llm.chat_json
+        chat_json_vision = _llm.chat_json_vision
+
+        IS_IMAGE = ext in {".jpg", ".jpeg", ".png"}
+        text_is_thin = len(raw_text.strip()) < MIN_TEXT_CHARS_PER_PAGE  # < 30 chars = scanned/empty
+        source_label = "regex"
+
+        llm_raw: dict = {}
+
+        # ---- TEXT PATH ----
+        if not IS_IMAGE and not text_is_thin:
+            user_msg = _LLM_EXTRACT_TEXT_USER.format(text=raw_text[:4000])
+            llm_raw = chat_json(
+                system_prompt=_LLM_EXTRACT_SYSTEM,
+                user_content=user_msg,
+            )
+            if llm_raw:
+                source_label = "regex+llm_text"
+                _logger.info(
+                    "LLM text extraction ran; %d fields in response.", len(llm_raw)
+                )
+
+        # ---- VISION PATH ----
+        # Run if: image file, scanned PDF, or text path left key fields still missing
+        _key_fields = {"full_name", "date_of_birth", "mobile_number", "state"}
+        text_left_gaps = bool(
+            _key_fields & set(result.uncertain_fields)
+        ) and not llm_raw
+
+        if IS_IMAGE or text_is_thin or text_left_gaps:
+            if IS_IMAGE:
+                images = [file_bytes]   # raw image bytes directly
+            else:
+                images = _pdf_to_png_pages(file_bytes, max_pages=3)
+
+            if images:
+                vision_raw = chat_json_vision(
+                    system_prompt=_LLM_EXTRACT_SYSTEM,
+                    user_text=_LLM_EXTRACT_VISION_USER,
+                    images=images,
+                )
+                if vision_raw:
+                    # Vision fills only what text path missed
+                    for k, v in vision_raw.items():
+                        if k not in llm_raw or llm_raw[k] is None:
+                            llm_raw[k] = v
+                    source_label = "regex+llm_vision"
+                    _logger.info(
+                        "LLM vision extraction ran; %d fields in response.", len(vision_raw)
+                    )
+
+        if not llm_raw:
+            return result  # nothing from LLM — return original unchanged
+
+        normalized = _validate_and_normalize_llm_output(llm_raw)
+        if not normalized:
+            return result
+
+        return _merge_llm_into_result(result, normalized, source_label)
+
+    except Exception as exc:
+        _logger.warning("LLM extraction fallback failed unexpectedly: %s", exc)
+        return result
