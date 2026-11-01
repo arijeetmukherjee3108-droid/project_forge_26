@@ -64,6 +64,9 @@ export interface IntentClassificationResponse {
   reason_chosen?: string;
   limitations?: string;
   fields_to_fill?: string[];
+  requires_login?: boolean;
+  login_url?: string;
+  workflow_steps?: string[];
 }
 
 /**
@@ -222,4 +225,6 @@ export interface DynamicScanResponse {
     original_label: string;
   }>;
   action_plan: DynamicActionPlanItem[];
+  is_reachable?: boolean;
+  error_message?: string;
 }

@@ -35,6 +35,9 @@ export interface BackendIntentClassifyResponse {
   reason_chosen?: string;
   limitations?: string;
   fields_to_fill?: string[];
+  requires_login?: boolean;
+  login_url?: string;
+  workflow_steps?: string[];
 }
 
 /**
@@ -47,7 +50,7 @@ export const KNOWN_SERVICES_CATALOG: IntentClassificationResponse[] = [
     service_name: 'Vidya Lakshmi — Higher Education Loan & Scholarship Portal',
     portal_id: 'VIDYA_LAKSHMI_PORTAL',
     portal_name: 'Vidya Lakshmi Portal (Ministry of Education & NSDL)',
-    portal_url: 'https://www.vidyalakshmi.co.in/Students/',
+    portal_url: 'https://www.vidyalakshmi.co.in/Students/login',
     category: 'education',
     required_documents: ['High School Marksheet', 'College Admission Proof', 'Income Certificate'],
     confidence: 0.95,
@@ -108,6 +111,17 @@ export const KNOWN_SERVICES_CATALOG: IntentClassificationResponse[] = [
     confidence: 0.88,
     description: 'Universal unified digital portal for applying to state certificates (income, caste, domicile) and citizen welfare schemes.',
   },
+  {
+    service_id: 'digilocker',
+    service_name: 'DigiLocker — National Digital Document Wallet & Citizen Sign-up',
+    portal_id: 'DIGILOCKER_PORTAL',
+    portal_name: 'DigiLocker Official Portal (MeitY)',
+    portal_url: 'https://www.digilocker.gov.in/',
+    category: 'general',
+    required_documents: [],
+    confidence: 0.98,
+    description: 'Direct citizen sign-up for DigiLocker wallet. 100% online registration without document upload.',
+  },
 ];
 
 /**
@@ -116,6 +130,11 @@ export const KNOWN_SERVICES_CATALOG: IntentClassificationResponse[] = [
  */
 export const matchIntentFallback = (query: string): IntentClassificationResponse => {
   const q = (query || '').toLowerCase().trim();
+
+  // DigiLocker Citizen Sign-up (Zero document upload needed)
+  if (/digilocker|digi\s*locker|digital\s*locker/i.test(q)) {
+    return KNOWN_SERVICES_CATALOG.find((k) => k.service_id === 'digilocker') || KNOWN_SERVICES_CATALOG[0];
+  }
 
   // Education & Scholarships
   if (/scholarship|vidya|lakshmi|loan|student|college|school|university|fees|study|matric|degree|education|btech|mbbs/i.test(q)) {
@@ -189,6 +208,13 @@ export const classifyIntent = async (query: string): Promise<IntentClassificatio
         reason_chosen: b.reason_chosen,
         limitations: b.limitations,
         fields_to_fill: b.fields_to_fill || [],
+        requires_login: b.requires_login ?? true,
+        login_url: b.login_url || b.portal_url,
+        workflow_steps: b.workflow_steps || [
+          '1. Citizen Portal Authentication & Sign-In',
+          '2. Scheme Application Form',
+          '3. CAPTCHA Verification & Final Submission',
+        ],
       };
     }
   } catch (err) {

@@ -385,43 +385,45 @@ async def scan_portal_url(url: str, profile: Optional[CitizenProfile] = None) ->
 
         target_url = url.strip()
         navigated = False
+        nav_error = ""
 
-        if target_url.startswith(("http://", "https://", "file://")):
+        if target_url.startswith(("http://", "https://")):
             try:
-                await page.goto(target_url, wait_until="domcontentloaded", timeout=12000)
+                resp = await page.goto(target_url, wait_until="domcontentloaded", timeout=10000)
+                if resp and resp.status >= 400:
+                    navigated = False
+                    nav_error = f"HTTP {resp.status} - Government server error or invalid path"
+                else:
+                    navigated = True
+            except Exception as nav_err:
+                nav_error = str(nav_err)
+                logger.warning("Direct navigation to %s failed (%s).", target_url, nav_err)
+
+        elif target_url.startswith("file://"):
+            try:
+                await page.goto(target_url, wait_until="domcontentloaded")
                 navigated = True
             except Exception as nav_err:
-                logger.warning("Direct navigation to %s failed (%s). Checking local mock templates.", target_url, nav_err)
-                try:
-                    await page.close()
-                except Exception:
-                    pass
-                page = await context.new_page()
+                nav_error = str(nav_err)
 
         if not navigated:
-            # Fallback for offline development: ONLY match if URL explicitly references that template
-            static_dir = Path(__file__).resolve().parent.parent / "static"
-            cand_files = list(static_dir.glob("*.html")) if static_dir.exists() else []
-            target_file = None
-            for cf in cand_files:
-                if cf.stem.lower() in target_url.lower():
-                    target_file = cf
-                    break
-            if target_file:
-                await page.goto(f"file://{target_file.resolve()}", wait_until="domcontentloaded")
-            else:
-                # Do NOT randomly map an unreachable government portal to rajmsme income certificate mock!
-                logger.info("No matching local mock for %s; returning clean descriptor.", target_url)
-                return {
-                    "portal_url": target_url,
-                    "title": target_url,
-                    "fields": [],
-                    "required_documents": [],
-                    "required_documents_meta": [],
-                    "action_plan": [],
-                }
+            # If the remote government portal cannot be reached, DO NOT silently substitute a mock file!
+            # Report honest unreachable status to the user and frontend.
+            logger.warning("Government portal %s is unreachable / offline: %s", target_url, nav_error)
+            return {
+                "portal_url": target_url,
+                "title": f"Site Unreachable ({target_url})",
+                "fields": [],
+                "required_documents": [],
+                "required_documents_meta": [],
+                "action_plan": [],
+                "is_reachable": False,
+                "error_message": f"Government portal is offline or unresolvable ({nav_error or 'DNS/Server down'}).",
+            }
 
         blueprint = await scan_and_blueprint_page(page, profile)
+        blueprint["is_reachable"] = True
+        blueprint["error_message"] = None
         return blueprint
     finally:
         if browser:
@@ -436,6 +438,7 @@ async def execute_dynamic_action_plan(
 ) -> List[str]:
     """
     Executes the LLM-generated action plan sequentially on the live portal page.
+    Includes Feature 3: Smart Dropdown (cascading waits) and Smart Calendar (change-event firing).
     Returns list of human-readable completed steps.
     """
     completed = []
@@ -453,21 +456,59 @@ async def execute_dynamic_action_plan(
             if not el:
                 continue
 
-            if action == "fill" and value is not None:
+            # Feature 3: Smart Calendar / Date input handler
+            tag = await el.evaluate("(e) => e.tagName.toLowerCase()")
+            el_type = await el.evaluate("(e) => (e.type || '').toLowerCase()")
+            is_date_field = (
+                el_type == "date"
+                or any(k in selector.lower() for k in ["dob", "date", "birth", "calendar", "cal"])
+            )
+
+            if action == "fill" and is_date_field and value is not None:
+                # Set date directly, remove readonly if set, and dispatch native change/input events
+                await page.evaluate(
+                    """([sel, val]) => {
+                        const input = document.querySelector(sel);
+                        if (input) {
+                            input.removeAttribute('readonly');
+                            input.value = val;
+                            input.dispatchEvent(new Event('input', { bubbles: true }));
+                            input.dispatchEvent(new Event('change', { bubbles: true }));
+                            input.dispatchEvent(new Event('blur', { bubbles: true }));
+                        }
+                    }""",
+                    [selector, str(value)],
+                )
+                completed.append(f"📅 Smart Calendar set {selector} to '{value}' with change-event confirmed")
+
+            elif action == "fill" and value is not None:
                 await el.click()
                 await el.fill("")
                 await el.type(str(value), delay=25)
+                await page.evaluate("(e) => { e.dispatchEvent(new Event('input', { bubbles: true })); e.dispatchEvent(new Event('change', { bubbles: true })); }", el)
                 completed.append(f"Filled {selector} with '{value}'")
 
             elif action == "select" and value is not None:
+                # Feature 3: Smart Cascading Dropdown Handler
+                selected_val = str(value)
                 try:
-                    await el.select_option(label=str(value), timeout=1500)
+                    await el.select_option(label=selected_val, timeout=1500)
                 except Exception:
                     try:
-                        await el.select_option(value=str(value), timeout=1500)
+                        await el.select_option(value=selected_val, timeout=1500)
                     except Exception:
                         await el.select_option(index=1)
-                completed.append(f"Selected '{value}' in {selector}")
+
+                # Dispatch change and input events to trigger dependent AJAX cascades (e.g. State -> District -> Tehsil)
+                await page.evaluate("(e) => { e.dispatchEvent(new Event('change', { bubbles: true })); e.dispatchEvent(new Event('input', { bubbles: true })); }", el)
+
+                # Wait for any potential cascading child dropdowns to populate (options > 1)
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=1200)
+                except Exception:
+                    await asyncio.sleep(0.3)
+
+                completed.append(f"Selected '{value}' in {selector} (cascading event dispatched)")
 
             elif action == "check":
                 if not await el.is_checked():
