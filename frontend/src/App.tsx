@@ -1729,7 +1729,7 @@ const App: React.FC = () => {
                         <div className="chat-bubble assistant" style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
                           <div className="hunting-spinner" style={{ width: '16px', height: '16px' }} />
                           <span style={{ fontSize: '0.88rem', color: '#94a3b8' }}>
-                            AI Advisor is checking eligibility criteria & official portals...
+                            AI Assistant is thinking...
                           </span>
                         </div>
                       </div>
