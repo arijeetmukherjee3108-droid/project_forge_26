@@ -17,6 +17,7 @@ live portal. These are sensible generic placeholders only.
 
 from __future__ import annotations
 
+import re
 from datetime import date
 from typing import Any, Callable, Optional
 
@@ -530,11 +531,13 @@ def check_eligibility(
         results = [
             RuleResult(
                 rule_id="name_verified",
+                description="Citizen Name Verification",
                 passed=has_name,
                 explanation="Citizen full name verified." if has_name else "Citizen full name is required for registration.",
             ),
             RuleResult(
                 rule_id="mobile_verified",
+                description="Mobile Communication Verification",
                 passed=has_mobile,
                 explanation="Valid 10-digit mobile number provided for portal communication." if has_mobile else "Valid 10-digit mobile number is required.",
             ),
