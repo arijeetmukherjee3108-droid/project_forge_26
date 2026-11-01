@@ -611,6 +611,90 @@ _INTENT_KEYWORD_MAP: dict[str, dict] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# LLM fallback — fires ONLY when keyword score == 0 (ambiguous / conversational)
+# ---------------------------------------------------------------------------
+
+_LLM_SYSTEM_PROMPT = """You are an expert Indian GovTech Navigator.
+Given a citizen's conversational query in English, Hindi, or Hinglish, identify the exact target government scheme.
+Available Schemes:
+- "vidyalakshmi": Higher education scholarships, college fees, student education loans.
+- "pm_kisan": Small/marginal farmer income support (Rs 6,000/yr), agriculture seeds/fertilizer subsidies.
+- "ration_card": Food security, subsidized grain, BPL/Antyodaya cards.
+- "1784": Construction / unorganized labour welfare certificates.
+- "citizen_registration": General citizen portal signup on ServicePlus.
+
+Respond STRICTLY in JSON format:
+{
+  "matched_service_id": "vidyalakshmi",
+  "confidence": 0.96,
+  "explanation": "Citizen is seeking financial assistance for college admission fees.",
+  "suggested_documents": ["marksheet", "income_certificate", "aadhaar"]
+}"""
+
+_VALID_SERVICE_IDS = frozenset(SERVICE_RULES.keys())  # exact codebase IDs
+
+
+class _LLMResult:
+    """Lightweight validator for raw LLM dict — no external dependency beyond Pydantic."""
+
+    __slots__ = ("matched_service_id", "confidence", "explanation", "suggested_documents")
+
+    def __init__(self, data: dict) -> None:
+        sid = str(data.get("matched_service_id", "")).strip()
+        if sid not in _VALID_SERVICE_IDS:
+            raise ValueError(f"Invalid matched_service_id: {sid!r}")
+        self.matched_service_id = sid
+
+        raw_conf = data.get("confidence", 0.0)
+        try:
+            conf = float(raw_conf)
+        except (TypeError, ValueError):
+            conf = 0.0
+        self.confidence = max(0.0, min(1.0, conf))  # clamp to [0, 1]
+
+        self.explanation = str(data.get("explanation") or "LLM matched scheme.")
+
+        raw_docs = data.get("suggested_documents") or []
+        self.suggested_documents = (
+            [str(d) for d in raw_docs] if isinstance(raw_docs, list) else []
+        )
+
+
+def _llm_classify_intent(raw_query: str) -> "IntentClassifyResponse | None":
+    """
+    Call the Groq LLM and return an IntentClassifyResponse, or None if the
+    LLM is unavailable, returns invalid data, or times out.
+    Imports llm_client lazily so a missing groq package never breaks the module.
+    """
+    try:
+        try:
+            from app.llm_client import chat_json  # type: ignore
+        except ImportError:
+            from backend.app.llm_client import chat_json  # type: ignore
+
+        raw: dict = chat_json(
+            system_prompt=_LLM_SYSTEM_PROMPT,
+            user_content=raw_query,
+        )
+        if not raw:
+            return None
+
+        validated = _LLMResult(raw)
+        svc_cfg = SERVICE_RULES[validated.matched_service_id]
+        return IntentClassifyResponse(
+            matched_service_id=validated.matched_service_id,
+            service_name=svc_cfg["name"],
+            confidence=validated.confidence,
+            explanation=validated.explanation,
+            suggested_documents=validated.suggested_documents,
+        )
+    except Exception as exc:  # noqa: BLE001
+        import logging as _log
+        _log.getLogger(__name__).warning("LLM intent fallback failed: %s", exc)
+        return None
+
+
 def classify_citizen_intent(text: str) -> IntentClassifyResponse:
     """
     Classify the citizen's prompt/voice transcript to the closest government scheme.
@@ -653,6 +737,10 @@ def classify_citizen_intent(text: str) -> IntentClassifyResponse:
     elif best_score == 1:
         confidence = 0.78
     else:
+        # No keyword matched — try the LLM fallback before accepting the default.
+        llm_result = _llm_classify_intent(raw)
+        if llm_result is not None:
+            return llm_result
         confidence = 0.60
         matched_reason = "Query did not strongly match a specific scheme; defaulted to ServicePlus 1784."
 
