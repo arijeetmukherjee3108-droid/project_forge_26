@@ -18,7 +18,7 @@ import {
 // ── Base URL Configuration ──────────────────────────────────────────────────
 // Put your live Render backend URL here (e.g. 'https://your-backend.onrender.com')
 // or configure VITE_API_URL in Render static site environment variables.
-export const RENDER_BACKEND_URL = '';
+export const RENDER_BACKEND_URL = 'https://sahayakai-backend-6zm6.onrender.com';
 
 const getBaseUrl = (): string => {
   const envUrl = (import.meta as any).env?.VITE_API_URL;
