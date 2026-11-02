@@ -17,7 +17,7 @@ import {
 
 const getBaseUrl = (): string => {
   const envUrl = (import.meta as any).env?.VITE_API_URL;
-  if (envUrl) return envUrl;
+  if (envUrl) return envUrl.replace(/\/+$/, '');
   if (typeof window !== 'undefined' && window.location.hostname) {
     return `http://${window.location.hostname}:8000`;
   }
