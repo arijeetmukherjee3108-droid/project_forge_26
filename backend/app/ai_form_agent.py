@@ -414,7 +414,10 @@ async def scan_portal_url(url: str, profile: Optional[CitizenProfile] = None) ->
     pw = await async_playwright().start()
     browser = None
     try:
-        browser = await pw.chromium.launch(headless=True)
+        browser = await pw.chromium.launch(
+            headless=True,
+            args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--single-process"],
+        )
         context = await browser.new_context(ignore_https_errors=True)
         page = await context.new_page()
 

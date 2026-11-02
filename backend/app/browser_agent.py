@@ -229,8 +229,8 @@ async def start_application(
     entry_url = _resolve_portal_url(service_id, profile)
     target_goal = _resolve_target_goal(service_id, profile)
 
-    # Determine headless mode from environment
-    headless_env = os.getenv("BROWSER_HEADLESS")
+    # Determine headless mode from environment (Render / Cloud: HEADLESS=true)
+    headless_env = os.getenv("BROWSER_HEADLESS") or os.getenv("HEADLESS")
     if headless_env is not None:
         headless = headless_env.lower() in ("1", "true", "yes")
     else:
@@ -238,10 +238,18 @@ async def start_application(
 
     pw = await async_playwright().start()
 
+    low_ram_args = [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
+        "--single-process",
+    ]
+
     try:
         browser = await pw.chromium.launch(
             headless=headless,
-            slow_mo=80,
+            args=low_ram_args if headless else ["--no-sandbox"],
+            slow_mo=0 if headless else 80,
         )
         context = await browser.new_context(
             ignore_https_errors=True,
