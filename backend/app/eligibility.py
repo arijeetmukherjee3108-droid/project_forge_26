@@ -117,7 +117,7 @@ def _rule_max_age(profile: CitizenProfile, cfg: dict) -> RuleResult:
 def _rule_required_fields(profile: CitizenProfile, cfg: dict) -> RuleResult:
     """All fields listed in cfg['fields'] must be non-None."""
     fields: list[str] = cfg["fields"]
-    missing = [f for f in fields if getattr(profile, f, None) is None]
+    missing = [f for f in fields if not getattr(profile, f, None)]
     if not missing:
         return RuleResult(
             rule_id="required_fields",
@@ -399,6 +399,7 @@ SERVICE_RULES: dict[str, dict] = {
                     "fields": [
                         "full_name",
                         "mobile_number",
+                        "email",
                         "state",
                     ],
                 },
@@ -685,11 +686,14 @@ _INTENT_KEYWORD_MAP: dict[str, dict] = {
         "description": "Matched construction / unorganized labour welfare certificate (Service 1784).",
     },
     "digilocker_apaar": {
-                "reason": "Academic Bank of Credits (ABC) & APAAR ID are officially issued under DigiLocker by Ministry of Education.",
-                "fields": ["Full Name", "Date of Birth", "Gender", "Identity Type", "Identity Value", "Admission Year", "Institution Name"],
-                "limitations": "Zero document upload portal. Human-in-the-Loop selection required for issuing institution/board.",
-            },
-            "digilocker": {
+        "keywords": [
+            "apaar", "apaar id", "abc id", "academic bank of credits",
+            "apaar card", "abc card", "student apaar", "student abc",
+        ],
+        "default_docs": [],
+        "description": "Matched DigiLocker APAAR / Academic Bank of Credits student ID.",
+    },
+    "digilocker": {
         "keywords": [
             "digilocker", "digi locker", "digital locker", "create digilocker",
             "digilocker account", "digilocker registration", "digilocker signup",
