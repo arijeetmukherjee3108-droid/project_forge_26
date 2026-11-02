@@ -417,6 +417,10 @@ export const checkSessionStatus = async (sessionId: string): Promise<{
   current_url: string;
   is_logged_in: boolean;
   steps_completed: string[];
+  page_preview_b64?: string;
+  citizen_guidance?: string;
+  citizen_guidance_hindi?: string;
+  message?: string;
 }> => {
   const resp = await axios.get(`${BASE_URL}/api/apply/session-status/${sessionId}`);
   return resp.data;

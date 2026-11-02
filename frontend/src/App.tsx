@@ -638,6 +638,8 @@ const App: React.FC = () => {
   const [uncertainFields, setUncertainFields] = useState<string[]>([]);
   const [verified, setVerified] = useState(false);
   const [eligibility, setEligibility] = useState<EligibilityResponse | null>(null);
+  const [citizenGuidance, setCitizenGuidance] = useState<string>('');
+  const [citizenGuidanceHindi, setCitizenGuidanceHindi] = useState<string>('');
 
   // Step 4: Agent
   const [agentLog, setAgentLog] = useState<string[]>([]);
@@ -1684,12 +1686,12 @@ const App: React.FC = () => {
         if (!val) continue;
         const s = sel.toLowerCase();
         const strVal = String(val).trim();
-        if (s.includes('email') && !activeProfile.email) activeProfile.email = strVal;
-        if (s.includes('name') && !s.includes('father') && !activeProfile.full_name) activeProfile.full_name = strVal;
-        if (s.includes('father') && !activeProfile.father_or_guardian_name) activeProfile.father_or_guardian_name = strVal;
-        if ((s.includes('mobile') || s.includes('phone')) && !activeProfile.mobile_number) activeProfile.mobile_number = strVal.replace(/\D/g, '').slice(0, 10);
-        if (s.includes('state') && !activeProfile.state) activeProfile.state = strVal;
-        if ((s.includes('pin') || s.includes('postal')) && !activeProfile.pincode) activeProfile.pincode = strVal.replace(/\D/g, '').slice(0, 6);
+        if (s.includes('email') || s.includes('mail')) activeProfile.email = strVal;
+        if (s.includes('name') && !s.includes('father')) activeProfile.full_name = strVal;
+        if (s.includes('father')) activeProfile.father_or_guardian_name = strVal;
+        if (s.includes('mobile') || s.includes('phone')) activeProfile.mobile_number = strVal.replace(/\D/g, '').slice(0, 10);
+        if (s.includes('state')) activeProfile.state = strVal;
+        if (s.includes('pin') || s.includes('postal')) activeProfile.pincode = strVal.replace(/\D/g, '').slice(0, 6);
       }
       if (dynamicBlueprint?.fields) {
         for (const f of dynamicBlueprint.fields) {
@@ -1697,12 +1699,12 @@ const App: React.FC = () => {
           if (!val) continue;
           const lbl = (f.label || '').toLowerCase();
           const strVal = String(val).trim();
-          if (lbl.includes('email') && !activeProfile.email) activeProfile.email = strVal;
-          if (lbl.includes('name') && !lbl.includes('father') && !activeProfile.full_name) activeProfile.full_name = strVal;
-          if (lbl.includes('father') && !activeProfile.father_or_guardian_name) activeProfile.father_or_guardian_name = strVal;
-          if ((lbl.includes('mobile') || lbl.includes('phone')) && !activeProfile.mobile_number) activeProfile.mobile_number = strVal.replace(/\D/g, '').slice(0, 10);
-          if (lbl.includes('state') && !activeProfile.state) activeProfile.state = strVal;
-          if ((lbl.includes('pin') || lbl.includes('postal')) && !activeProfile.pincode) activeProfile.pincode = strVal.replace(/\D/g, '').slice(0, 6);
+          if (lbl.includes('email') || lbl.includes('mail')) activeProfile.email = strVal;
+          if (lbl.includes('name') && !lbl.includes('father')) activeProfile.full_name = strVal;
+          if (lbl.includes('father')) activeProfile.father_or_guardian_name = strVal;
+          if (lbl.includes('mobile') || lbl.includes('phone')) activeProfile.mobile_number = strVal.replace(/\D/g, '').slice(0, 10);
+          if (lbl.includes('state')) activeProfile.state = strVal;
+          if (lbl.includes('pin') || lbl.includes('postal')) activeProfile.pincode = strVal.replace(/\D/g, '').slice(0, 6);
         }
       }
       setProfile(activeProfile);
@@ -1827,36 +1829,82 @@ const App: React.FC = () => {
       setAgentLog([
         '🚀 Initializing Playwright browser in visible Chromium mode...',
         `🌐 Navigating to ${portalName} (${portalUrl})...`,
-        '✍️ Autonomous agent mapping verified citizen profile to official portal fields...'
+        '🤖 Vision Agent starting — analyzing page screenshots in real-time...'
       ]);
 
       const docFilename = profile.source_documents?.find(f => f.startsWith('saved:'))?.replace('saved:', '');
       const activeProfile = cleanOverrideUrl ? { ...profile, target_portal_url: cleanOverrideUrl } : profile;
       const resp = await startApplication(activeProfile, targetPortalId, docFilename);
-      const steps = resp.steps_completed || resp.log_steps || [];
-      if (steps.length > 0) {
-        setAgentLog(steps);
+      const initialSteps = resp.steps_completed || resp.log_steps || [];
+      if (initialSteps.length > 0) {
+        setAgentLog(initialSteps);
       }
-      if (resp.session_id) setSessionId(resp.session_id);
+      if (resp.session_id) {
+        setSessionId(resp.session_id);
+
+        // Start polling for live updates
+        const pollId = setInterval(async () => {
+          try {
+            const status = await checkSessionStatus(resp.session_id);
+            
+            // Update steps log
+            if (status.steps_completed && status.steps_completed.length > 0) {
+              setAgentLog(status.steps_completed);
+            }
+            
+            // Update screenshot preview
+            if (status.page_preview_b64) {
+              setPageScreenshot(status.page_preview_b64);
+            }
+            
+            // Update citizen guidance state
+            if (status.citizen_guidance) {
+              setCitizenGuidance(status.citizen_guidance);
+            }
+            if (status.citizen_guidance_hindi) {
+              setCitizenGuidanceHindi(status.citizen_guidance_hindi);
+            }
+
+            // Check if agent is done
+            if (status.status !== 'running') {
+              clearInterval(pollId);
+              setAgentStatus(status.status as any);
+              setAgentRunning(false);
+              setAgentDone(true);
+              setLoading(false);
+
+              if (status.status === 'failed') {
+                showToast(status.message || 'Agent encountered an issue.', 'error');
+                setAgentLog(prev => [...prev, `❌ [FAILED] ${status.message || 'Agent failed.'}`]);
+              } else if (status.status === 'awaiting_login') {
+                showToast(status.message || 'Agent paused — OTP or login required.', 'info');
+              } else if (status.status === 'awaiting_user_selection') {
+                showToast(status.message || 'Agent paused — your input needed.', 'info');
+              } else if (status.status === 'awaiting_captcha') {
+                showToast(status.message || 'Agent paused — CAPTCHA detected.', 'info');
+              } else {
+                showToast(status.message || 'Agent completed successfully!', 'success');
+              }
+            }
+          } catch (pollErr) {
+            console.warn('Polling error:', pollErr);
+          }
+        }, 2000);
+
+        // Store pollId for cleanup (clear on unmount etc.)
+        // We rely on status !== 'running' to clear the interval
+      }
       if (resp.page_preview_b64) setPageScreenshot(resp.page_preview_b64);
       if (resp.captcha_image_b64) setCaptchaScreenshot(resp.captcha_image_b64);
       if (resp.action_plan && resp.action_plan.length > 0) setLiveActionPlan(resp.action_plan);
       if (resp.detected_fields && resp.detected_fields.length > 0) setLiveDetectedFields(resp.detected_fields);
       setAgentStatus(resp.status);
-      setAgentRunning(false);
-      if (resp.status === 'failed') {
-        setAgentDone(false);
-        showToast(resp.message || 'Agent encountered an issue.', 'error');
-        setAgentLog(prev => [...prev, `❌ [FAILED] ${resp.message || 'Agent failed to complete form.'}`]);
-      } else if (resp.status === 'awaiting_login') {
+
+      // Don't set agentRunning=false here if status is 'running' — polling handles that
+      if (resp.status !== 'running') {
+        setAgentRunning(false);
         setAgentDone(true);
-        showToast(resp.message || 'Agent docked on DigiLocker login gateway. Please sign in on browser.', 'info');
-      } else if (resp.status === 'awaiting_user_selection') {
-        setAgentDone(true);
-        showToast('Agent reached Institution/Board selection checkpoint.', 'success');
-      } else {
-        setAgentDone(true);
-        showToast(resp.message || 'Live agent completed filling fields.', 'success');
+        setLoading(false);
       }
     } catch (err: any) {
       setAgentRunning(false);
@@ -1865,7 +1913,10 @@ const App: React.FC = () => {
       setAgentLog((prev) => [...prev, `❌ [ERROR] ${errMsg}`]);
       showToast(`Failed to start agent: ${errMsg}`, 'error');
     } finally {
-      setLoading(false);
+      // Don't unconditionally set loading=false — polling handles it for running state
+      if (!agentRunning) {
+        setLoading(false);
+      }
     }
   };
 
@@ -3522,6 +3573,91 @@ const App: React.FC = () => {
                   </div>
                 </div>
 
+                {/* Citizen Action Card — Farmer-Friendly Bilingual Guidance */}
+                {(agentStatus === 'awaiting_login' || agentStatus === 'awaiting_captcha' || agentStatus === 'awaiting_user_selection') && (citizenGuidance || citizenGuidanceHindi) && (
+                  <div style={{
+                    margin: '1rem 0',
+                    padding: '1.2rem',
+                    borderRadius: '12px',
+                    border: '2px solid #f59e0b',
+                    background: 'linear-gradient(135deg, rgba(245,158,11,0.15) 0%, rgba(245,158,11,0.05) 100%)',
+                    boxShadow: '0 0 20px rgba(245,158,11,0.15)',
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.8rem' }}>
+                      <span style={{ fontSize: '1.5rem' }}>👋</span>
+                      <span style={{ fontWeight: 700, fontSize: '1.05rem', color: '#f59e0b' }}>
+                        Action Required — कृपया ध्यान दें
+                      </span>
+                    </div>
+                    {citizenGuidance && (
+                      <p style={{ margin: '0.4rem 0', fontSize: '0.95rem', color: 'rgba(255,255,255,0.9)', lineHeight: '1.6' }}>
+                        🇬🇧 {citizenGuidance}
+                      </p>
+                    )}
+                    {citizenGuidanceHindi && (
+                      <p style={{ margin: '0.4rem 0', fontSize: '0.95rem', color: 'rgba(255,255,255,0.85)', lineHeight: '1.6' }}>
+                        🇮🇳 {citizenGuidanceHindi}
+                      </p>
+                    )}
+                    <button
+                      type="button"
+                      style={{
+                        marginTop: '1rem',
+                        padding: '0.7rem 1.5rem',
+                        borderRadius: '8px',
+                        border: 'none',
+                        background: 'linear-gradient(135deg, #10b981, #059669)',
+                        color: '#fff',
+                        fontWeight: 700,
+                        fontSize: '0.95rem',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.5rem',
+                        width: '100%',
+                        justifyContent: 'center',
+                      }}
+                      disabled={loading || agentRunning}
+                      onClick={() => {
+                        if (sessionId) {
+                          resumeApplication(sessionId, '', true);
+                          setCitizenGuidance('');
+                          setCitizenGuidanceHindi('');
+                          setAgentStatus('running' as any);
+                          setAgentRunning(true);
+                          setAgentDone(false);
+                          showToast('Resuming agent...', 'info');
+                          // Start polling again after resume
+                          const pollId = setInterval(async () => {
+                            try {
+                              const status = await checkSessionStatus(sessionId);
+                              if (status.steps_completed && status.steps_completed.length > 0) {
+                                setAgentLog(status.steps_completed);
+                              }
+                              if (status.page_preview_b64) setPageScreenshot(status.page_preview_b64);
+                              if (status.citizen_guidance) setCitizenGuidance(status.citizen_guidance);
+                              if (status.citizen_guidance_hindi) setCitizenGuidanceHindi(status.citizen_guidance_hindi);
+                              if (status.status !== 'running') {
+                                clearInterval(pollId);
+                                setAgentStatus(status.status as any);
+                                setAgentRunning(false);
+                                setAgentDone(true);
+                                if (status.status === 'failed') showToast(status.message || 'Agent failed.', 'error');
+                                else if (status.status === 'awaiting_login') showToast(status.message || 'OTP required.', 'info');
+                                else if (status.status === 'awaiting_user_selection') showToast(status.message || 'Your input needed.', 'info');
+                                else if (status.status === 'awaiting_captcha') showToast(status.message || 'CAPTCHA detected.', 'info');
+                                else showToast(status.message || 'Done!', 'success');
+                              }
+                            } catch { /* ignore poll errors */ }
+                          }, 2000);
+                        }
+                      }}
+                    >
+                      ✅ I've Completed This Step — Continue →
+                    </button>
+                  </div>
+                )}
+
                 {/* Human-in-the-Loop Mission Control */}
                 {agentDone && !submitted && (
                   isDigilocker ? (
@@ -4118,23 +4254,6 @@ const App: React.FC = () => {
                           </div>
                         </div>
 
-                        {/* 1-Click Interactive Mock Sandbox Test Button */}
-                        <div style={{ borderTop: '1px solid rgba(255, 255, 255, 0.08)', paddingTop: '0.85rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
-                          <span style={{ fontSize: '0.76rem', color: '#94a3b8' }}>
-                            Want to test the full automated dropdown flow instantly?
-                          </span>
-                          <button
-                            type="button"
-                            className="gemini-btn gemini-btn-primary"
-                            style={{ fontSize: '0.82rem', padding: '0.4rem 0.9rem', background: 'linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)' }}
-                            onClick={() => {
-                              showToast('Launching Playwright on APAAR Safe Simulator Sandbox...', 'info');
-                              handleStartAgent('http://localhost:8000/portal/digilocker_apaar_mock');
-                            }}
-                          >
-                            🧪 Test on APAAR Simulator
-                          </button>
-                        </div>
                       </div>
                     </div>
                   ) : dynamicBlueprint?.is_reachable === false ? (

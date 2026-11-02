@@ -1,5 +1,5 @@
 """
-main.py — Voice-to-Legacy FastAPI application server.
+main.py — Voice-to-Legacy / SahayakAI FastAPI application server.
 
 Start the server:
     cd backend && uvicorn app.main:app --reload
@@ -8,12 +8,12 @@ Endpoints:
   GET  /health                → {"status": "ok"}
   POST /api/documents/extract → ExtractResponse
   POST /api/eligibility       → EligibilityResponse
-  POST /api/apply/start       → ApplyStartResponse  (PLACEHOLDER — Step C2)
-  POST /api/apply/resume      → ApplyResumeResponse (PLACEHOLDER — Step C2)
+  POST /api/apply/start       → ApplyStartResponse  (Vision-Guided Agent)
+  POST /api/apply/resume      → ApplyResumeResponse  (Resume after human input)
 
 CORS allows http://localhost:5173 (Vite) and http://localhost:3000 (CRA).
 Uploaded files are saved under backend/uploads/ with UUID-prefixed names
-so Member 1's browser agent can later attach them to the portal form.
+so the browser agent can later attach them to the portal form.
 
 DO NOT log request bodies — they may contain personal citizen data.
 """
@@ -42,6 +42,7 @@ try:
         navigate_digilocker_apaar,
         autofill_digilocker_apaar,
         get_browser_session_status,
+        resume_after_human,
     )
     from app.ai_form_agent import scan_portal_url
     from app.google_vault import search_google_vault, fetch_google_vault_file
@@ -72,6 +73,7 @@ except ImportError:
         navigate_digilocker_apaar,
         autofill_digilocker_apaar,
         get_browser_session_status,
+        resume_after_human,
     )
     from backend.app.ai_form_agent import scan_portal_url
     from backend.app.google_vault import search_google_vault, fetch_google_vault_file
@@ -100,13 +102,14 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 app = FastAPI(
-    title="Voice-to-Legacy API",
+    title="Voice-to-Legacy / SahayakAI API",
     description=(
-        "Backend API for the Voice-to-Legacy citizen services assistant. "
+        "Backend API for SahayakAI GovTech assistant. "
         "Extracts CitizenProfile from uploaded documents, checks eligibility, "
-        "and (via browser agent) fills government portal forms."
+        "and uses an autonomous Vision-Guided browser agent to fill real "
+        "government portal forms."
     ),
-    version="0.1.0",
+    version="2.0.0",
 )
 
 app.add_middleware(
@@ -145,24 +148,6 @@ async def health_check() -> dict:
     return {"status": "ok"}
 
 
-@app.get("/mock_portal.html", include_in_schema=False)
-async def serve_mock_portal():
-    """Serves the offline mock portal for live document-upload testing."""
-    mock_file = STATIC_DIR / "mock_portal.html"
-    if mock_file.exists():
-        return FileResponse(mock_file, media_type="text/html")
-    raise HTTPException(status_code=404, detail="Mock portal not found")
-
-
-@app.get("/{filename}.html", include_in_schema=False)
-async def serve_portal_html(filename: str):
-    """Generically serves any local HTML portal page for live zero-shot testing."""
-    mock_file = STATIC_DIR / f"{filename}.html"
-    if mock_file.exists():
-        return FileResponse(mock_file, media_type="text/html")
-    raise HTTPException(status_code=404, detail=f"Portal page '{filename}.html' not found")
-
-
 @app.post(
     "/api/documents/extract",
     response_model=ExtractResponse,
@@ -177,14 +162,6 @@ async def extract_document(
     - **profile**: the extracted CitizenProfile (may have None fields)
     - **uncertain_fields**: fields the UI should highlight for manual review
     - **raw_text_preview**: first 300 characters of parsed text (Aadhaar masked)
-
-    The uploaded file is saved to `backend/uploads/<uuid>.<ext>` so Member 1's
-    browser agent can later attach it to the government portal form.
-
-    **Note**: The saved filename is returned inside the response profile's
-    `source_documents` list as the last element (e.g. `"saved:abc123.pdf"`).
-    Member 1: look for entries prefixed with `"saved:"` in `source_documents`.
-    <!-- TODO(Step C2): pass the saved filename to ApplyStartRequest.document_filename -->
     """
     # ---- Extension check (fast, before reading body)
     filename = file.filename or "upload"
@@ -219,8 +196,7 @@ async def extract_document(
     except ValueError as exc:
         raise HTTPException(status_code=415, detail=str(exc)) from exc
 
-    # ---- Append the saved filename so Member 1 can locate it
-    # We prefix with "saved:" so it's distinguishable from document-type tags.
+    # ---- Append the saved filename so browser agent can locate it
     result.profile.source_documents.append(f"saved:{saved_name}")
 
     return result
@@ -235,10 +211,7 @@ async def extract_document(
 async def classify_intent(body: IntentClassifyRequest) -> IntentClassifyResponse:
     """
     Classifies the citizen's prompt or transcribed voice query to a matching
-    government scheme (e.g. '1784', 'vidyalakshmi', 'pm_kisan', 'ration_card').
-
-    Returns the matched service ID, human-readable name, confidence score,
-    and recommended document types for automatic Google Vault discovery.
+    government scheme.
     """
     return eligibility.classify_citizen_intent(body.text)
 
@@ -251,17 +224,8 @@ async def classify_intent(body: IntentClassifyRequest) -> IntentClassifyResponse
 )
 async def check_eligibility(body: EligibilityRequest) -> EligibilityResponse:
     """
-    Runs deterministic eligibility rules for the given `service_id` against
-    the provided `profile`.
-
-    Returns an **EligibilityResponse** with:
-    - **eligible**: True only if every rule passed
-    - **results**: per-rule breakdown with plain-English explanations
-    - **summary**: one-sentence verdict the UI can display
-
-    Currently supported `service_id` values:
-    - `"1784"` — Construction Worker Registration / Citizen Certificate
-    - `"citizen_registration"` — ServicePlus Citizen Self-Registration
+    Runs deterministic eligibility rules for the given service_id against
+    the provided profile.
     """
     try:
         return eligibility.check_eligibility(body.profile, body.service_id)
@@ -276,13 +240,18 @@ async def check_eligibility(body: EligibilityRequest) -> EligibilityResponse:
     "/api/apply/start",
     response_model=ApplyStartResponse,
     tags=["apply"],
-    summary="Start a browser-agent session to fill a government form",
+    summary="Start Vision-Guided browser agent on a real government portal",
 )
 async def apply_start(body: ApplyStartRequest) -> ApplyStartResponse:
     """
-    Starts the autonomous Playwright browser agent to navigate and pre-fill fields
-    on the government portal. Pauses at the CAPTCHA checkpoint and returns the
-    cropped CAPTCHA and page preview for human verification.
+    Launches a visible Chromium browser, navigates to the real government portal,
+    and runs the autonomous Vision-Guided Agent to fill the form.
+
+    The agent will pause at:
+    - OTP verification (citizen enters OTP in the browser)
+    - CAPTCHA (citizen solves CAPTCHA in the browser)
+    - Subjective choices (citizen makes personal selections)
+    - Final submit button (never auto-submits)
     """
     return await start_application(
         profile=body.profile,
@@ -295,12 +264,12 @@ async def apply_start(body: ApplyStartRequest) -> ApplyStartResponse:
     "/api/apply/resume",
     response_model=ApplyResumeResponse,
     tags=["apply"],
-    summary="Resume a paused browser-agent session after CAPTCHA entry",
+    summary="Resume Vision Agent after human input (OTP, CAPTCHA, selection)",
 )
 async def apply_resume(body: ApplyResumeRequest) -> ApplyResumeResponse:
     """
-    Resumes the active Playwright browser session by typing the citizen's solved
-    CAPTCHA into the portal and completing submission upon user approval.
+    Resumes the Vision-Guided Agent after the citizen has completed their
+    input (OTP, CAPTCHA, dropdown selection) on the live browser.
     """
     return await resume_application(
         session_id=body.session_id,
@@ -314,12 +283,12 @@ async def apply_resume(body: ApplyResumeRequest) -> ApplyResumeResponse:
     "/api/apply/digilocker-navigate",
     response_model=ApplyStartResponse,
     tags=["apply"],
-    summary="Deep-navigate to APAAR ID form post-login and fill initial dropdowns",
+    summary="Resume Vision Agent after DigiLocker login",
 )
 async def digilocker_navigate(body: DigiLockerNavigateRequest) -> ApplyStartResponse:
     """
-    Executes autonomous navigation to APAAR form on DigiLocker post-login,
-    opens dropdowns, fills initial identity options, and halts at Institution/Board checkpoint.
+    Resumes the Vision Agent after the citizen has logged into DigiLocker.
+    The agent will autonomously navigate to the target service (e.g., APAAR ID form).
     """
     return await navigate_digilocker_apaar(session_id=body.session_id)
 
@@ -328,12 +297,12 @@ async def digilocker_navigate(body: DigiLockerNavigateRequest) -> ApplyStartResp
     "/api/apply/digilocker-autofill",
     response_model=ApplyResumeResponse,
     tags=["apply"],
-    summary="Resume APAAR autofill after Human-in-the-Loop Institution/Board selection",
+    summary="Resume Vision Agent after human-in-the-loop selection",
 )
 async def digilocker_autofill(body: DigiLockerAutofillRequest) -> ApplyResumeResponse:
     """
-    Resumes after Human-in-the-Loop selection, checks consent, highlights 'Get Document',
-    and halts right before final submit for sovereign citizen review.
+    Resumes the Vision Agent after the citizen has made their selection
+    (e.g., school board, institution name) on the live portal.
     """
     return await autofill_digilocker_apaar(
         session_id=body.session_id,
@@ -360,13 +329,7 @@ async def get_session_status_endpoint(session_id: str) -> dict:
 async def google_search(body: GoogleSearchRequest) -> GoogleSearchResponse:
     """
     Searches the citizen's Google Drive and Gmail attachments for documents
-    matching the query (e.g. 'income certificate', 'marksheet').
-
-    Returns a list of candidate files with name, source, size, and date
-    so the citizen can pick the correct one before downloading.
-
-    Set ``demo_mode=true`` for hackathon demos (returns synthetic candidates
-    without requiring a live Google OAuth token).
+    matching the query.
     """
     candidates = search_google_vault(
         access_token=body.access_token,
@@ -388,15 +351,7 @@ async def google_search(body: GoogleSearchRequest) -> GoogleSearchResponse:
 async def google_fetch(body: GoogleFetchRequest) -> ExtractResponse:
     """
     Downloads the selected file from Google Drive or Gmail, saves it to
-    ``backend/uploads/``, extracts a CitizenProfile using the same pipeline
-    as ``/api/documents/extract``, and returns the standard ExtractResponse.
-
-    The saved filename is appended to ``profile.source_documents`` as
-    ``"saved:<uuid>.pdf"`` so the browser agent can later attach it to
-    the government portal form.
-
-    Set ``demo_mode=true`` for hackathon demos (generates a synthetic
-    certificate PDF without calling Google APIs).
+    backend/uploads/, extracts a CitizenProfile, and returns ExtractResponse.
     """
     try:
         file_bytes, filename = fetch_google_vault_file(
@@ -439,17 +394,12 @@ async def google_fetch(body: GoogleFetchRequest) -> ExtractResponse:
 )
 async def scan_form_dom(body: DynamicScanRequest) -> DynamicScanResponse:
     """
-    Scans any arbitrary government portal in India, distills interactive fields
-    into a compact ~400-token JSON blueprint, infers required documents, and uses
-    AI to generate an actionable pre-fill and upload plan.
+    Scans any arbitrary government portal, distills interactive fields
+    into a compact JSON blueprint, and generates an actionable plan.
     """
     url = body.portal_url.strip()
     if not url.startswith(("http://", "https://", "file://")):
-        mock_file = STATIC_DIR / f"{url.lower()}_mock.html"
-        if mock_file.exists():
-            url = f"file://{mock_file.resolve()}"
-        else:
-            url = f"https://{url}.gov.in"
+        url = f"https://{url}.gov.in"
 
     try:
         blueprint = await scan_portal_url(url, body.profile)
@@ -459,4 +409,3 @@ async def scan_form_dom(body: DynamicScanRequest) -> DynamicScanResponse:
             status_code=500,
             detail=f"Failed to scan portal DOM: {exc}",
         ) from exc
-
