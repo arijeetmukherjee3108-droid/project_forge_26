@@ -15,10 +15,20 @@ import {
   DynamicScanResponse,
 } from './types';
 
+// ── Base URL Configuration ──────────────────────────────────────────────────
+// Put your live Render backend URL here (e.g. 'https://your-backend.onrender.com')
+// or configure VITE_API_URL in Render static site environment variables.
+export const RENDER_BACKEND_URL = '';
+
 const getBaseUrl = (): string => {
   const envUrl = (import.meta as any).env?.VITE_API_URL;
-  if (envUrl) return envUrl.replace(/\/+$/, '');
-  if (typeof window !== 'undefined' && window.location.hostname) {
+  if (envUrl && typeof envUrl === 'string' && envUrl.trim() !== '') {
+    return envUrl.trim().replace(/\/+$/, '');
+  }
+  if (RENDER_BACKEND_URL && RENDER_BACKEND_URL.trim() !== '') {
+    return RENDER_BACKEND_URL.trim().replace(/\/+$/, '');
+  }
+  if (typeof window !== 'undefined' && window.location.hostname && window.location.hostname !== 'localhost') {
     return `http://${window.location.hostname}:8000`;
   }
   return 'http://127.0.0.1:8000';
