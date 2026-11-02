@@ -217,25 +217,54 @@ Look at the attached screenshot and decide the single best next action. Respond 
         )
 
         if not vision_response or "action" not in vision_response:
-            # Vision LLM failed — try text-only DOM fallback
-            logger.warning("Vision LLM returned empty/invalid on turn %d. Attempting DOM text fallback.", turn)
-            steps_completed.append(f"⚠️ Turn {turn}: Vision LLM returned no action. Retrying...")
+            # Vision LLM failed (e.g. rate limit reached) — engage zero-shot DOM Text Reasoner fallback
+            logger.warning("Vision LLM unavailable or rate-limited on turn %d. Engaging DOM Text Reasoner fallback.", turn)
+            steps_completed.append(f"🤖 Turn {turn}: Vision LLM rate-limited (daily quota). Engaging DOM Text Reasoner...")
 
-            # Try once more
-            vision_response = chat_json_vision(
-                system_prompt=_VISION_AGENT_SYSTEM_PROMPT,
-                user_text=user_prompt,
-                images=[screenshot_bytes],
-            )
+            try:
+                try:
+                    from app.ai_form_agent import distill_form_dom
+                except ImportError:
+                    from backend.app.ai_form_agent import distill_form_dom
+
+                blueprint = await distill_form_dom(page)
+                dom_summary = json.dumps(blueprint, indent=2)
+
+                text_prompt = f"""## Current Page URL
+{current_url}
+
+## Target Goal
+{target_goal}
+
+## Citizen Data Pool (ONLY use these values for filling)
+{data_pool_text}
+
+## Interactive Form Elements on Page (Extracted from DOM)
+{dom_summary}
+
+## Previous Actions Taken
+{history_text}
+
+## Instructions
+Analyze the interactive DOM fields and the citizen data pool. Decide the single best next action (e.g., fill a field with matching citizen data, click Next/Submit, or pause at OTP/CAPTCHA).
+Respond with strict JSON matching the required schema."""
+
+                vision_response = chat_json(
+                    system_prompt=_VISION_AGENT_SYSTEM_PROMPT,
+                    user_content=text_prompt,
+                )
+            except Exception as dom_err:
+                logger.error("DOM fallback also failed: %s", dom_err)
+
             if not vision_response or "action" not in vision_response:
-                steps_completed.append("❌ Vision LLM failed after retry. Pausing for human guidance.")
+                steps_completed.append("❌ Both Vision and DOM Text Reasoners could not analyze the page. Pausing for human guidance.")
                 return {
                     "status": "error",
                     "steps_completed": steps_completed,
-                    "reason_for_pause": "Vision LLM could not analyze the page.",
+                    "reason_for_pause": "AI agent reached daily rate limits and could not analyze the page.",
                     "turn_count": turn,
-                    "citizen_guidance": "",
-                    "citizen_guidance_hindi": "",
+                    "citizen_guidance": "Agent reached daily rate limits. Please complete this step manually on the browser.",
+                    "citizen_guidance_hindi": "एजेंट की दैनिक सीमा समाप्त हो गई है। कृपया स्क्रीन पर मैन्युअल रूप से भरें।",
                 }
 
         # 4. Parse the action
